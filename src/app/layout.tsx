@@ -2,7 +2,6 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import { Bungee, Space_Grotesk } from "next/font/google"
 import Script from "next/script"
-import { AdSlot } from "@/components/ads/AdSlot"
 import "./globals.css"
 
 const displayFont = Bungee({
@@ -56,7 +55,6 @@ export default function RootLayout({
           />
         ) : null}
         <div className="flex min-h-screen flex-col">
-          <AdSlot />
           <div className="flex-1">{children}</div>
           <div className="mx-auto w-full max-w-md px-4 pb-4 text-center text-xs text-black/50">
             By playing DecksUp!, you agree to our{" "}

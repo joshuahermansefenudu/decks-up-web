@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import AdSlot from "@/components/ads/AdSlot"
 
 export default function HomePage() {
   return (
@@ -43,6 +44,8 @@ export default function HomePage() {
             </SecondaryButton>
           </CardContent>
         </Card>
+
+        <AdSlot slot="HOME_BANNER" className="mt-8 mb-4 flex justify-center" />
 
         <div className="sticker-card p-4 text-sm text-black/70">
           Gather 2+ friends on phones, upload a couple of photos, and get ready

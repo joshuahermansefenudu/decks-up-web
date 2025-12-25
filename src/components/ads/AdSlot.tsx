@@ -1,34 +1,30 @@
 "use client"
 
 import * as React from "react"
-import { usePathname } from "next/navigation"
 
 const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT
-const ADSENSE_SLOT = process.env.NEXT_PUBLIC_ADSENSE_SLOT
+const ADSENSE_ENABLED = process.env.NEXT_PUBLIC_ADSENSE_ENABLED === "true"
 
-function AdSlot() {
-  const pathname = usePathname()
-  const hasPushedRef = React.useRef(false)
+type AdSlotProps = {
+  slot: string
+  className?: string
+  format?: string
+}
 
-  if (pathname?.startsWith("/game")) {
-    return null
-  }
-
-  if (process.env.NODE_ENV !== "production") {
-    return null
-  }
-
-  if (!ADSENSE_CLIENT || !ADSENSE_SLOT) {
-    // TODO: Set NEXT_PUBLIC_ADSENSE_CLIENT and NEXT_PUBLIC_ADSENSE_SLOT in production.
+export default function AdSlot({
+  slot,
+  className,
+  format = "auto",
+}: AdSlotProps) {
+  if (!ADSENSE_ENABLED || !ADSENSE_CLIENT || !slot) {
     return null
   }
 
   React.useEffect(() => {
-    if (hasPushedRef.current) {
-      return
-    }
-    hasPushedRef.current = true
     try {
+      if (typeof window === "undefined") {
+        return
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ;(window as any).adsbygoogle = (window as any).adsbygoogle || []
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -39,19 +35,13 @@ function AdSlot() {
   }, [])
 
   return (
-    <div className="w-full px-4 pb-2 pt-2">
-      <div className="mx-auto w-full max-w-md">
-        <ins
-          className="adsbygoogle block w-full"
-          style={{ display: "block" }}
-          data-ad-client={ADSENSE_CLIENT}
-          data-ad-slot={ADSENSE_SLOT}
-          data-ad-format="auto"
-          data-full-width-responsive="true"
-        />
-      </div>
-    </div>
+    <ins
+      className={`adsbygoogle ${className ?? ""}`.trim()}
+      style={{ display: "block" }}
+      data-ad-client={ADSENSE_CLIENT}
+      data-ad-slot={slot}
+      data-ad-format={format}
+      data-full-width-responsive="true"
+    />
   )
 }
-
-export { AdSlot }

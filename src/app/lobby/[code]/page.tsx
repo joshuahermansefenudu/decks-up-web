@@ -15,6 +15,7 @@ import { SecondaryButton } from "@/components/ui/secondary-button"
 import { getBaseUrl } from "@/lib/base-url"
 import { LobbyRealtime } from "@/components/lobby/lobby-realtime"
 import { LobbyExitButton } from "@/components/lobby/lobby-exit-button"
+import AdSlot from "@/components/ads/AdSlot"
 
 type LobbyResponse = {
   lobby: {
@@ -187,6 +188,8 @@ export default async function LobbyPage({
             </CardContent>
           </Card>
         </div>
+
+        <AdSlot slot="LOBBY_BANNER" className="mt-6 flex justify-center" />
 
         <LobbyUploader
           lobbyCode={data.lobby.code}

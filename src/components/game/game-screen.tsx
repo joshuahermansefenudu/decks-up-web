@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import AdSlot from "@/components/ads/AdSlot"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 type Player = {
@@ -203,6 +204,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         >
           Back Home
         </SecondaryButton>
+        <AdSlot slot="RESULTS_BANNER" className="mt-6 flex justify-center" />
       </div>
     )
   }
