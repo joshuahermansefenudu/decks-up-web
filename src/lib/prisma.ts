@@ -7,7 +7,8 @@ const globalForPrisma = globalThis as unknown as {
   pool: Pool | undefined
 }
 
-const databaseUrl = process.env.DATABASE_URL
+const databaseUrl =
+  process.env.DATABASE_URL ?? process.env.DIRECT_DATABASE_URL ?? ""
 const pool =
   globalForPrisma.pool ??
   new Pool({
