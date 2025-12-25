@@ -1,0 +1,67 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LobbyStatus {
+  LOBBY
+  IN_GAME
+  ENDED
+}
+
+model Lobby {
+  id        String      @id @default(cuid())
+  code      String      @unique @db.VarChar(6)
+  status    LobbyStatus @default(LOBBY)
+  createdAt DateTime    @default(now())
+  expiresAt DateTime
+  endedAt   DateTime?
+  hostPlayerId    String?
+  activePlayerId  String?
+  currentCardIndex Int     @default(0)
+  currentTurnIndex Int     @default(0)
+
+  players Player[]
+  photos  Photo[]
+}
+
+model Player {
+  id        String   @id @default(cuid())
+  lobbyId   String
+  name      String
+  isHost    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  leftAt    DateTime?
+
+  lobby Lobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  photos Photo[]
+
+  @@index([lobbyId])
+}
+
+model Photo {
+  id          String   @id @default(cuid())
+  lobbyId     String
+  playerId    String
+  title       String
+  storagePath String
+  publicUrl   String
+  deckOrder   Int?
+  createdAt   DateTime @default(now())
+
+  lobby  Lobby  @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([lobbyId])
+  @@index([playerId])
+}

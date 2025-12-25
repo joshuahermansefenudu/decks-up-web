@@ -1,0 +1,99 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme inline {
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-offwhite: var(--offwhite);
+  --color-lightgray: var(--lightgray);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 6px);
+  --radius-2xl: calc(var(--radius) + 12px);
+  --radius-3xl: calc(var(--radius) + 18px);
+  --radius-4xl: calc(var(--radius) + 24px);
+}
+
+:root {
+  --offwhite: #fdfdfd;
+  --lightgray: #e2e2e2;
+  --ink: #000000;
+  --yellow: #ffe500;
+  --radius: 1.25rem;
+  --background: var(--offwhite);
+  --foreground: var(--ink);
+  --card: var(--offwhite);
+  --card-foreground: var(--ink);
+  --popover: var(--offwhite);
+  --popover-foreground: var(--ink);
+  --primary: var(--yellow);
+  --primary-foreground: var(--ink);
+  --secondary: var(--ink);
+  --secondary-foreground: var(--offwhite);
+  --muted: var(--lightgray);
+  --muted-foreground: var(--ink);
+  --accent: var(--yellow);
+  --accent-foreground: var(--ink);
+  --destructive: #e53935;
+  --border: var(--ink);
+  --input: var(--ink);
+  --ring: var(--ink);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--offwhite);
+    color: var(--foreground);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    background-image: linear-gradient(
+        90deg,
+        rgba(0, 0, 0, 0.05) 1px,
+        transparent 1px
+      ),
+      linear-gradient(180deg, rgba(0, 0, 0, 0.05) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display);
+  }
+
+  .sticker-card {
+    border: 2px solid var(--ink);
+    box-shadow: 6px 6px 0 0 var(--ink);
+    border-radius: 1.5rem;
+    background: var(--offwhite);
+  }
+}
