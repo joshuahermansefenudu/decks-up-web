@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
+type LobbyRow = { status: string; [key: string]: any }
+
 type LobbyRealtimeProps = {
   lobbyId: string
   lobbyCode: string
@@ -55,7 +57,10 @@ function LobbyRealtime({
           table: "Lobby",
           filter: `id=eq.${lobbyId}`,
         },
-        (payload) => {
+        (payload: {
+          new: Partial<LobbyRow> | null
+          old: Partial<LobbyRow> | null
+        }) => {
           router.refresh()
           const nextStatus = payload.new?.status
           if (nextStatus === "IN_GAME" && playerId) {
