@@ -78,6 +78,15 @@ export default function RootLayout({
                 Terms
               </Link>
             </div>
+            <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-black/60">
+              <span>For advertisement or info:</span>
+              <a
+                className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-xs font-semibold text-black shadow-[2px_2px_0_#000]"
+                href="mailto:business@decksupcard.com"
+              >
+                business@decksupcard.com
+              </a>
+            </p>
           </footer>
         </div>
       </body>
