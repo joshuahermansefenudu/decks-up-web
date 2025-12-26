@@ -16,6 +16,7 @@ import { getBaseUrl } from "@/lib/base-url"
 import { LobbyRealtime } from "@/components/lobby/lobby-realtime"
 import { LobbyExitButton } from "@/components/lobby/lobby-exit-button"
 import AdSlot from "@/components/ads/AdSlot"
+import { LobbyCode } from "@/components/lobby/lobby-code"
 
 type LobbyResponse = {
   lobby: {
@@ -155,7 +156,7 @@ export default async function LobbyPage({
               <CardDescription>Send this to your crew.</CardDescription>
             </CardHeader>
             <CardContent>
-              <Badge>{data.lobby.code}</Badge>
+              <LobbyCode code={data.lobby.code} />
             </CardContent>
           </Card>
 
