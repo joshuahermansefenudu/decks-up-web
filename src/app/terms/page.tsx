@@ -1,7 +1,7 @@
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
 
-const LAST_UPDATED = "December 24, 2025"
+const LAST_UPDATED = "December 27, 2025"
 
 export default function TermsPage() {
   return (
@@ -30,15 +30,51 @@ export default function TermsPage() {
           </h2>
           <p className="text-sm text-black/80">
             DecksUp! is a free, browser-based social guessing game provided for
-            entertainment purposes. You agree to use the Game in a lawful and
-            respectful manner.
+            entertainment purposes. You agree to use the Game in a lawful,
+            respectful, and appropriate manner.
           </p>
           <p className="text-sm text-black/80">You agree not to:</p>
           <ul className="list-disc space-y-1 pl-5 text-sm text-black/80">
             <li>Abuse, disrupt, or attempt to interfere with the Game</li>
             <li>Exploit bugs or attempt to manipulate gameplay</li>
-            <li>Use the Game for unlawful or harmful activities</li>
+            <li>Use the Game for unlawful, harmful, or prohibited activities</li>
           </ul>
+        </section>
+
+        <section className="space-y-2">
+          <h2 className="text-lg font-semibold uppercase tracking-wide">
+            User-Generated Content & Moderation
+          </h2>
+          <p className="text-sm text-black/80">
+            DecksUp! allows players to upload images during gameplay as part of
+            the game experience.
+          </p>
+          <p className="text-sm text-black/80">
+            You agree that all uploaded content must comply with applicable
+            laws, these Terms, and advertising platform policies. Prohibited
+            content includes, but is not limited to:
+          </p>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-black/80">
+            <li>Nudity or sexually explicit material</li>
+            <li>Content involving minors</li>
+            <li>Hate speech, harassment, or threats</li>
+            <li>Violence or graphic imagery</li>
+            <li>Any unlawful, harmful, or offensive material</li>
+          </ul>
+          <p className="text-sm text-black/80">
+            DecksUp! reserves the right to actively review uploaded content
+            during gameplay. If prohibited content is detected at any time,
+            DecksUp! may, at its sole discretion and without notice:
+          </p>
+          <ul className="list-disc space-y-1 pl-5 text-sm text-black/80">
+            <li>Immediately terminate the game session</li>
+            <li>Permanently delete the content</li>
+            <li>Restrict or block further access to the Game</li>
+          </ul>
+          <p className="text-sm text-black/80">
+            All moderation decisions are final and made to ensure compliance
+            with platform and advertising policies.
+          </p>
         </section>
 
         <section className="space-y-2">
@@ -57,12 +93,16 @@ export default function TermsPage() {
             Advertising
           </h2>
           <p className="text-sm text-black/80">
-            DecksUp! displays third-party advertisements. We are not responsible
-            for the content, accuracy, or practices of third-party advertisers.
+            DecksUp! displays third-party advertisements on non-game pages only.
           </p>
           <p className="text-sm text-black/80">
-            Interactions with advertisers are solely between you and the
-            advertiser.
+            Advertisements are not shown during active gameplay or on screens
+            where user-uploaded content is displayed.
+          </p>
+          <p className="text-sm text-black/80">
+            DecksUp! is not responsible for the content, accuracy, or practices
+            of third-party advertisers. Interactions with advertisers are solely
+            between you and the advertiser.
           </p>
         </section>
 
