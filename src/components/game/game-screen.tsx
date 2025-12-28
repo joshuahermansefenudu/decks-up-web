@@ -7,6 +7,7 @@ import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
 import AdSlot from "@/components/ads/AdSlot"
 import { supabaseBrowser } from "@/lib/supabase-browser"
+import { useKeepScreenAwake } from "@/lib/useKeepScreenAwake"
 
 type Player = {
   id: string
@@ -62,6 +63,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [initialState.lobby.code, playerId])
 
   const isActive = state.lobby.activePlayerId === playerId
+  const keepAwakeEnabled = hasSeenTutorial && state.lobby.status === "IN_GAME"
+  const wakeLock = useKeepScreenAwake(keepAwakeEnabled)
 
   React.useEffect(() => {
     if (!hasSeenTutorial) {
@@ -77,7 +80,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     if (lastTurnIndex !== state.lobby.currentTurnIndex) {
       setLastTurnIndex(state.lobby.currentTurnIndex)
       setShowCard(false)
-      setCountdown(4)
+      setCountdown(10)
     }
   }, [hasSeenTutorial, isActive, lastTurnIndex, state.lobby.currentTurnIndex])
 
@@ -344,6 +347,23 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                   <div className="mt-4 text-6xl font-bold text-black">
                     {countdown}
                   </div>
+                  {keepAwakeEnabled && (!wakeLock.isSupported || wakeLock.hadError) ? (
+                    <div className="mt-4 rounded-xl border-2 border-black bg-offwhite px-3 py-2 text-xs text-black/70 shadow-[2px_2px_0_#000]">
+                      <p>
+                        Tip: Turn Low Power Mode off / keep your screen active in
+                        your phone settings.
+                      </p>
+                      {!wakeLock.isActive ? (
+                        <button
+                          type="button"
+                          className="mt-2 rounded-full border-2 border-black bg-primary px-3 py-1 text-xs font-semibold text-black shadow-[2px_2px_0_#000]"
+                          onClick={() => wakeLock.requestWakeLock()}
+                        >
+                          Keep screen on
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -396,6 +416,23 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                       {state.photos.currentCard.title}
                     </h2>
                   </div>
+                  {keepAwakeEnabled && (!wakeLock.isSupported || wakeLock.hadError) ? (
+                    <div className="mx-auto w-full max-w-[90%] rounded-xl border-2 border-black bg-offwhite px-3 py-2 text-center text-xs text-black/70 shadow-[2px_2px_0_#000]">
+                      <p>
+                        Tip: Turn Low Power Mode off / keep your screen active in
+                        your phone settings.
+                      </p>
+                      {!wakeLock.isActive ? (
+                        <button
+                          type="button"
+                          className="mt-2 rounded-full border-2 border-black bg-primary px-3 py-1 text-xs font-semibold text-black shadow-[2px_2px_0_#000]"
+                          onClick={() => wakeLock.requestWakeLock()}
+                        >
+                          Keep screen on
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {actionError ? (
                     <p className="text-center text-sm font-semibold text-black">
                       {actionError}
@@ -442,6 +479,23 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             <span className="animate-pulse [animation-delay:200ms]">.</span>
             <span className="animate-pulse [animation-delay:400ms]">.</span>
           </div>
+          {keepAwakeEnabled && (!wakeLock.isSupported || wakeLock.hadError) ? (
+            <div className="mt-2 rounded-xl border-2 border-black bg-lightgray px-3 py-2 text-xs text-black/70 shadow-[2px_2px_0_#000]">
+              <p>
+                Tip: Turn Low Power Mode off / keep your screen active in your
+                phone settings.
+              </p>
+              {!wakeLock.isActive ? (
+                <button
+                  type="button"
+                  className="mt-2 rounded-full border-2 border-black bg-primary px-3 py-1 text-xs font-semibold text-black shadow-[2px_2px_0_#000]"
+                  onClick={() => wakeLock.requestWakeLock()}
+                >
+                  Keep screen on
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
     </div>
