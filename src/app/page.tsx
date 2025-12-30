@@ -19,7 +19,7 @@ export default function HomePage() {
     <PageContainer>
       <Stack className="gap-6">
         <header className="space-y-3">
-          <Badge className="w-fit">mobile party game</Badge>
+          <Badge className="w-fit">Charades party game</Badge>
           <h1 className="font-display text-4xl uppercase tracking-wide sm:text-5xl">
             Decks Up!
           </h1>
@@ -48,8 +48,8 @@ export default function HomePage() {
         <AdSlot slot="HOME_BANNER" className="mt-8 mb-4 flex justify-center" />
 
         <div className="sticker-card p-4 text-sm text-black/70">
-          Gather 2+ friends on phones, upload a couple of photos, and get ready
-          to play.
+          Gather 2+ friends on phones, upload up to five photos, and get ready to
+          play.
         </div>
 
         <Card>

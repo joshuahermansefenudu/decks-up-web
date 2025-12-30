@@ -12,8 +12,9 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
+import { SecondaryButton } from "@/components/ui/secondary-button"
 
-const MAX_PHOTOS = 2
+const MAX_PHOTOS = 5
 
 type UploadedPhoto = {
   id: string
@@ -53,6 +54,10 @@ function LobbyUploader({
   const [uploadedPhotos, setUploadedPhotos] = React.useState<UploadedPhoto[]>(
     initialPhotos
   )
+  const [removeErrors, setRemoveErrors] = React.useState<Record<string, string>>(
+    {}
+  )
+  const [removingIds, setRemovingIds] = React.useState<string[]>([])
   const [startError, setStartError] = React.useState("")
   const [isStarting, setIsStarting] = React.useState(false)
 
@@ -71,7 +76,7 @@ function LobbyUploader({
       const accepted = files.slice(0, Math.max(slots, 0))
       setLimitMessage(
         accepted.length < files.length
-          ? "Only two photos are allowed for now."
+          ? "Only five photos are allowed for now."
           : ""
       )
 
@@ -185,6 +190,56 @@ function LobbyUploader({
   const canStartGame =
     isHost && lobbyStatus === "LOBBY" && totalPhotos >= 1 && Boolean(playerId)
 
+  const handleRemoveUploaded = async (photoId: string) => {
+    if (!playerId) {
+      setRemoveErrors((current) => ({
+        ...current,
+        [photoId]: "Missing player id.",
+      }))
+      return
+    }
+
+    if (lobbyStatus !== "LOBBY") {
+      setRemoveErrors((current) => ({
+        ...current,
+        [photoId]: "You can only remove photos before the game starts.",
+      }))
+      return
+    }
+
+    setRemoveErrors((current) => ({ ...current, [photoId]: "" }))
+    setRemovingIds((current) => [...current, photoId])
+
+    try {
+      const response = await fetch("/api/photos/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ photoId, lobbyCode, playerId }),
+      })
+      const payload = await response.json().catch(() => ({}))
+
+      if (!response.ok) {
+        setRemoveErrors((current) => ({
+          ...current,
+          [photoId]: payload?.error ?? "Unable to remove photo.",
+        }))
+        return
+      }
+
+      setUploadedPhotos((current) =>
+        current.filter((photo) => photo.id !== photoId)
+      )
+      router.refresh()
+    } catch {
+      setRemoveErrors((current) => ({
+        ...current,
+        [photoId]: "Unable to remove photo.",
+      }))
+    } finally {
+      setRemovingIds((current) => current.filter((id) => id !== photoId))
+    }
+  }
+
   const handleStartGame = async () => {
     if (!playerId) {
       setStartError("Missing player id.")
@@ -221,11 +276,11 @@ function LobbyUploader({
         <div className="space-y-2">
           <CardTitle>Upload your cards</CardTitle>
           <CardDescription>
-            Add up to two photos and title each one.
+            Add up to five photos and title each one.
           </CardDescription>
         </div>
         <Badge variant="outline">
-          {totalSelected}/2
+          {totalSelected}/5
         </Badge>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -261,6 +316,24 @@ function LobbyUploader({
                   <p className="text-sm font-medium text-black/80">
                     {photo.title || "Untitled"}
                   </p>
+                  {removeErrors[photo.id] ? (
+                    <p className="mt-1 text-xs font-semibold text-black">
+                      {removeErrors[photo.id]}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="ml-auto">
+                  <SecondaryButton
+                    type="button"
+                    className="px-3 py-1 text-xs"
+                    disabled={
+                      removingIds.includes(photo.id) ||
+                      lobbyStatus !== "LOBBY"
+                    }
+                    onClick={() => handleRemoveUploaded(photo.id)}
+                  >
+                    {removingIds.includes(photo.id) ? "Removing..." : "Remove"}
+                  </SecondaryButton>
                 </div>
               </div>
             ))}

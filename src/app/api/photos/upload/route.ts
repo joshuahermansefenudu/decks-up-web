@@ -5,7 +5,7 @@ import { expireLobbyIfNeeded } from "@/lib/lobby-expiration"
 import { prisma } from "@/lib/prisma"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
-const MAX_PHOTOS = 2
+const MAX_PHOTOS = 5
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 function normalizeCode(code: string) {

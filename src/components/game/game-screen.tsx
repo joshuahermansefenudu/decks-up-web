@@ -8,6 +8,8 @@ import { SecondaryButton } from "@/components/ui/secondary-button"
 import AdSlot from "@/components/ads/AdSlot"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 import { useKeepScreenAwake } from "@/lib/useKeepScreenAwake"
+import { useTurnTimer } from "@/hooks/useTurnTimer"
+import { TurnTimer } from "@/components/game/TurnTimer"
 
 type Player = {
   id: string
@@ -50,6 +52,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [lastTurnIndex, setLastTurnIndex] = React.useState<number | null>(null)
   const [actionError, setActionError] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const isAdvancingRef = React.useRef(false)
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -65,6 +68,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const isActive = state.lobby.activePlayerId === playerId
   const keepAwakeEnabled = hasSeenTutorial && state.lobby.status === "IN_GAME"
   const wakeLock = useKeepScreenAwake(keepAwakeEnabled)
+  const turnKey = `${state.lobby.currentTurnIndex}-${state.lobby.currentCardIndex}`
+  // Tweak duration/urgent thresholds here.
+  // Timer checklist: starts on card, urgent at 10s, expires once, manual Next cancels, resets on turn change.
+  const turnTimer = useTurnTimer({
+    durationSeconds: 30,
+    urgentThresholdSeconds: 10,
+    onExpire: () => handleNext(),
+    autoStart: isActive && showCard && state.lobby.status === "IN_GAME",
+    key: turnKey,
+  })
 
   React.useEffect(() => {
     if (!hasSeenTutorial) {
@@ -141,11 +154,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   )
 
   const handleNext = async () => {
+    if (isAdvancingRef.current) {
+      return
+    }
     if (!playerId) {
       setActionError("Missing player id.")
       return
     }
 
+    isAdvancingRef.current = true
+    turnTimer.pause()
     setIsSubmitting(true)
     setActionError("")
 
@@ -164,6 +182,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     } catch {
       setActionError("Unable to advance turn.")
     } finally {
+      isAdvancingRef.current = false
       setIsSubmitting(false)
     }
   }
@@ -382,8 +401,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                 className="absolute left-1/2 top-1/2 origin-center -translate-x-1/2 -translate-y-1/2 rotate-90"
                 style={{ width: "100dvh", height: "100dvw" }}
               >
-                <div className="flex h-full w-full flex-col gap-3 px-4 py-4">
-                  <div className="flex min-h-0 flex-1 items-center justify-center gap-3">
+                <div className="relative flex h-full w-full flex-col gap-3 px-4 py-4">
+                  <div className="absolute right-3 top-3 z-30">
+                    <TurnTimer
+                      durationSeconds={30}
+                      secondsLeft={turnTimer.secondsLeft}
+                      progress={turnTimer.progress}
+                      isUrgent={turnTimer.isUrgent}
+                    />
+                  </div>
+                  <div className="flex min-h-0 flex-1 items-center justify-center gap-3 pt-8">
                     <div className="flex h-full w-16 items-center justify-center">
                       <SecondaryButton
                         type="button"
@@ -393,11 +420,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                         Leave
                       </SecondaryButton>
                     </div>
-                    <div className="flex min-h-0 w-[82%] items-center justify-center rounded-3xl border-2 border-black bg-lightgray/60 p-2 shadow-[6px_6px_0_#000]">
+                    <div className="flex min-h-0 w-[72%] items-center justify-center rounded-3xl border-2 border-black bg-lightgray/60 p-3 shadow-[6px_6px_0_#000]">
                       <img
                         src={state.photos.currentCard.publicUrl}
                         alt={state.photos.currentCard.title}
-                        className="h-full w-full object-contain"
+                        className="max-h-[68dvw] w-full object-contain"
                       />
                     </div>
                     <div className="flex h-full w-16 items-center justify-center">

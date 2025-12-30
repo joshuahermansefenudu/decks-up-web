@@ -141,7 +141,7 @@ export default async function LobbyPage({
               Lobby
             </h1>
             <p className="text-sm text-black/70">
-              Share the code and upload up to two photos.
+              Share the code and upload up to five photos.
             </p>
           </div>
           <div className="shrink-0">
@@ -180,7 +180,7 @@ export default async function LobbyPage({
                         {player.isHost ? " (Host)" : ""}
                       </span>
                       <Badge variant="outline" className="min-w-[56px] justify-center">
-                        {Math.min(player.photoCount, 2)}/2
+                        {Math.min(player.photoCount, 5)}/5
                       </Badge>
                     </li>
                   ))}
