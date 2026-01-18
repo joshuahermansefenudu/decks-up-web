@@ -26,7 +26,6 @@ type UploadedPhoto = {
 type PhotoItem = {
   id: string
   file: File
-  title: string
   status: "pending" | "uploading" | "error"
   error?: string
 }
@@ -83,7 +82,6 @@ function LobbyUploader({
       const nextItems = accepted.map((file) => ({
         id: crypto.randomUUID(),
         file,
-        title: "",
         status: "pending" as const,
       }))
 
@@ -91,19 +89,6 @@ function LobbyUploader({
     })
 
     event.target.value = ""
-  }
-
-  const handleTitleChange = (id: string, value: string) => {
-    setItems((current) =>
-      current.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              title: value,
-            }
-          : item
-      )
-    )
   }
 
   const handleUpload = async (itemId: string) => {
@@ -141,7 +126,6 @@ function LobbyUploader({
 
     const formData = new FormData()
     formData.append("file", item.file)
-    formData.append("title", item.title)
     formData.append("lobbyCode", lobbyCode)
     formData.append("playerId", playerId)
 
@@ -276,7 +260,7 @@ function LobbyUploader({
         <div className="space-y-2">
           <CardTitle>Upload your cards</CardTitle>
           <CardDescription>
-            Add up to five photos and title each one.
+            Add up to five photos.
           </CardDescription>
         </div>
         <Badge variant="outline">
@@ -312,9 +296,6 @@ function LobbyUploader({
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide">
                     Uploaded
-                  </p>
-                  <p className="text-sm font-medium text-black/80">
-                    {photo.title || "Untitled"}
                   </p>
                   {removeErrors[photo.id] ? (
                     <p className="mt-1 text-xs font-semibold text-black">
@@ -359,18 +340,6 @@ function LobbyUploader({
                 <p className="text-sm font-medium text-black/80">
                   {item.file.name}
                 </p>
-                <label className="mt-3 block text-xs font-semibold uppercase tracking-wide">
-                  Title
-                  <input
-                    type="text"
-                    value={item.title}
-                    onChange={(event) =>
-                      handleTitleChange(item.id, event.target.value)
-                    }
-                    placeholder="Give it a short title"
-                    className="mt-2 w-full rounded-lg border-2 border-black bg-offwhite px-3 py-2 text-sm shadow-[2px_2px_0_#000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite"
-                  />
-                </label>
                 {item.error ? (
                   <p className="mt-2 text-sm font-semibold text-black">
                     {item.error}

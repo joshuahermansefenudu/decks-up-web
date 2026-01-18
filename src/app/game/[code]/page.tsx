@@ -11,6 +11,7 @@ type GameResponse = {
     id: string
     code: string
     status: string
+    mode: "IN_PERSON" | "VIRTUAL"
     activePlayerId: string | null
     currentCardIndex: number
     currentTurnIndex: number

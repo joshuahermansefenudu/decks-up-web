@@ -126,10 +126,23 @@ export default function CreatePage() {
                   <p className="text-xs font-semibold uppercase tracking-wide text-black/70">
                     The gameplay
                   </p>
-                  <div className="mt-3 flex h-32 items-center justify-center rounded-xl border-2 border-dashed border-black/60 bg-lightgray/60 text-sm font-semibold text-black/70">
-                    {playMode === "in_person"
-                      ? "In-person setup placeholder"
-                      : "Virtual setup placeholder"}
+                  <div
+                    className="mt-3 overflow-hidden rounded-xl border-2 border-dashed border-black/60"
+                    style={{ backgroundColor: "#FED32F" }}
+                  >
+                    {playMode === "in_person" ? (
+                      <img
+                        src="/mode-in-person.png"
+                        alt="In-person gameplay"
+                        className="h-64 w-full object-contain"
+                      />
+                    ) : (
+                      <img
+                        src="/mode-virtual.png"
+                        alt="Virtual gameplay"
+                        className="h-64 w-full object-contain"
+                      />
+                    )}
                   </div>
                   <p className="mt-3 text-sm text-black/70">
                     {playMode === "in_person"

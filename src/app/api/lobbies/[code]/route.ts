@@ -50,24 +50,27 @@ export async function GET(request: Request, { params }: RouteContext) {
   }
 
   const url = new URL(request.url)
-  const playerId = url.searchParams.get("playerId")?.trim()
+  const playerId = url.searchParams.get("playerId")?.trim() ?? ""
   const totalPhotos = await prisma.photo.count({
     where: { lobbyId: lobby.id },
   })
-  const currentCard =
-    lobby.status === "IN_GAME"
-      ? await prisma.photo.findFirst({
-          where: {
-            lobbyId: lobby.id,
-            deckOrder: lobby.currentCardIndex,
-          },
-          select: {
-            id: true,
-            title: true,
-            publicUrl: true,
-          },
-        })
-      : null
+  const shouldRevealCard =
+    lobby.status === "IN_GAME" &&
+    (lobby.mode === "IN_PERSON" ||
+      (Boolean(playerId) && playerId !== lobby.activePlayerId))
+  const currentCard = shouldRevealCard
+    ? await prisma.photo.findFirst({
+        where: {
+          lobbyId: lobby.id,
+          deckOrder: lobby.currentCardIndex,
+        },
+        select: {
+          id: true,
+          title: true,
+          publicUrl: true,
+        },
+      })
+    : null
   const myPhotos = playerId
     ? await prisma.photo.findMany({
         where: { lobbyId: lobby.id, playerId },

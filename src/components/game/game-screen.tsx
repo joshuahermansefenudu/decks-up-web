@@ -9,7 +9,8 @@ import AdSlot from "@/components/ads/AdSlot"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 import { useKeepScreenAwake } from "@/lib/useKeepScreenAwake"
 import { useTurnTimer } from "@/hooks/useTurnTimer"
-import { TurnTimer } from "@/components/game/TurnTimer"
+import { useHeadAnchor } from "@/lib/virtual/useHeadAnchor"
+import { TurnOverlayCard } from "@/components/virtual/TurnOverlayCard"
 
 type Player = {
   id: string
@@ -28,6 +29,7 @@ type GameState = {
     id: string
     code: string
     status: string
+    mode: "IN_PERSON" | "VIRTUAL"
     activePlayerId: string | null
     currentCardIndex: number
     currentTurnIndex: number
@@ -43,6 +45,97 @@ type GameScreenProps = {
   playerId?: string
 }
 
+type VideoTileProps = {
+  stream: MediaStream | null
+  name: string
+  isActive: boolean
+  isSelf: boolean
+  showPlaceholder: boolean
+  card: Card | null
+}
+
+function VideoTile({
+  stream,
+  name,
+  isActive,
+  isSelf,
+  showPlaceholder,
+  card,
+}: VideoTileProps) {
+  const videoRef = React.useRef<HTMLVideoElement | null>(null)
+  const trackingEnabled = isActive && Boolean(stream)
+  const anchor = useHeadAnchor(videoRef, trackingEnabled)
+  const hasVideo = Boolean(
+    stream?.getVideoTracks().some((track) => track.enabled)
+  )
+
+  React.useEffect(() => {
+    if (!videoRef.current) {
+      return
+    }
+    if (stream) {
+      videoRef.current.srcObject = stream
+    }
+  }, [stream])
+
+  const isGuesserViewer = isActive && isSelf && showPlaceholder
+  const activeCard = isActive && !isSelf ? card : null
+
+  return (
+    <div
+      className={`relative h-full w-full overflow-hidden rounded-xl border-2 border-black bg-black/5 shadow-[3px_3px_0_#000] transition-all duration-300 ${
+        isActive ? "ring-4 ring-primary" : ""
+      }`}
+    >
+      {stream ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isSelf}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center bg-lightgray text-xs font-semibold uppercase tracking-wide text-black/60">
+          Camera loading
+        </div>
+      )}
+      {stream && !hasVideo ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-xs font-semibold uppercase tracking-wide text-offwhite">
+          Camera off
+        </div>
+      ) : null}
+
+      <div
+        className={`absolute bottom-2 left-2 rounded-full border-2 border-black bg-offwhite font-semibold uppercase tracking-wide text-black ${
+          isActive
+            ? "px-2 py-1 text-xs shadow-[2px_2px_0_#000]"
+            : "px-1.5 py-0.5 text-[8px]"
+        }`}
+      >
+        {name}
+        {isSelf ? " (You)" : ""}
+      </div>
+
+      {isActive ? (
+        <div className="absolute top-2 left-2 rounded-full border-2 border-black bg-primary px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]">
+          Guesser
+        </div>
+      ) : null}
+
+      {isActive ? (
+        <TurnOverlayCard
+          anchorX={anchor.x}
+          anchorY={anchor.y}
+          trackingVisible={anchor.visible}
+          isGuesserViewer={isGuesserViewer}
+          card={activeCard}
+        />
+      ) : null}
+    </div>
+  )
+}
+
 function GameScreen({ initialState, playerId }: GameScreenProps) {
   const router = useRouter()
   const [state, setState] = React.useState(initialState)
@@ -52,7 +145,18 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [lastTurnIndex, setLastTurnIndex] = React.useState<number | null>(null)
   const [actionError, setActionError] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [localStream, setLocalStream] = React.useState<MediaStream | null>(null)
+  const [remoteStreams, setRemoteStreams] = React.useState<
+    Record<string, MediaStream>
+  >({})
+  const [mediaError, setMediaError] = React.useState("")
+  const [isMicMuted, setIsMicMuted] = React.useState(false)
+  const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
+  const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
+  const channelRef = React.useRef<ReturnType<
+    typeof supabaseBrowser.channel
+  > | null>(null)
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -65,6 +169,102 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     setState(payload)
   }, [initialState.lobby.code, playerId])
 
+  type SignalPayload = {
+    type: "ready" | "offer" | "answer" | "ice"
+    from: string
+    to?: string
+    sdp?: RTCSessionDescriptionInit
+    candidate?: RTCIceCandidateInit
+  }
+
+  const sendSignal = React.useCallback((payload: SignalPayload) => {
+    channelRef.current?.send({
+      type: "broadcast",
+      event: "signal",
+      payload,
+    })
+  }, [])
+
+  const cleanupPeer = React.useCallback((peerId: string) => {
+    const peer = peersRef.current.get(peerId)
+    if (peer) {
+      peer.ontrack = null
+      peer.onicecandidate = null
+      peer.close()
+    }
+    peersRef.current.delete(peerId)
+    setRemoteStreams((current) => {
+      if (!current[peerId]) {
+        return current
+      }
+      const next = { ...current }
+      delete next[peerId]
+      return next
+    })
+  }, [])
+
+  const createPeerConnection = React.useCallback(
+    (peerId: string) => {
+      const existing = peersRef.current.get(peerId)
+      if (existing) {
+        return existing
+      }
+
+      const connection = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      })
+
+      if (localStream) {
+        localStream.getTracks().forEach((track) => {
+          connection.addTrack(track, localStream)
+        })
+      }
+
+      connection.onicecandidate = (event) => {
+        if (!event.candidate || !playerId) {
+          return
+        }
+        const candidate = event.candidate.toJSON
+          ? event.candidate.toJSON()
+          : event.candidate
+        sendSignal({
+          type: "ice",
+          from: playerId,
+          to: peerId,
+          candidate,
+        })
+      }
+
+      connection.ontrack = (event) => {
+        const [stream] = event.streams
+        if (!stream) {
+          return
+        }
+        setRemoteStreams((current) => {
+          if (current[peerId] === stream) {
+            return current
+          }
+          return { ...current, [peerId]: stream }
+        })
+      }
+
+      connection.onconnectionstatechange = () => {
+        if (
+          connection.connectionState === "failed" ||
+          connection.connectionState === "closed" ||
+          connection.connectionState === "disconnected"
+        ) {
+          cleanupPeer(peerId)
+        }
+      }
+
+      peersRef.current.set(peerId, connection)
+      return connection
+    },
+    [cleanupPeer, localStream, playerId, sendSignal]
+  )
+
+  const isVirtual = state.lobby.mode === "VIRTUAL"
   const isActive = state.lobby.activePlayerId === playerId
   const keepAwakeEnabled = hasSeenTutorial && state.lobby.status === "IN_GAME"
   const wakeLock = useKeepScreenAwake(keepAwakeEnabled)
@@ -75,11 +275,170 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     durationSeconds: 30,
     urgentThresholdSeconds: 10,
     onExpire: () => handleNext(),
-    autoStart: isActive && showCard && state.lobby.status === "IN_GAME",
+    autoStart: false,
     key: turnKey,
   })
 
   React.useEffect(() => {
+    if (!localStream) {
+      return
+    }
+    localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !isMicMuted
+    })
+    localStream.getVideoTracks().forEach((track) => {
+      track.enabled = !isVideoMuted
+    })
+  }, [isMicMuted, isVideoMuted, localStream])
+
+  React.useEffect(() => {
+    if (!isVirtual || !playerId) {
+      return
+    }
+
+    let cancelled = false
+    let activeStream: MediaStream | null = null
+
+    const requestMedia = async () => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMediaError("Camera and microphone are not supported.")
+        return
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: true,
+        })
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop())
+          return
+        }
+        activeStream = stream
+        setMediaError("")
+        setLocalStream(stream)
+      } catch {
+        setMediaError("Unable to access camera or microphone.")
+      }
+    }
+
+    requestMedia()
+
+    return () => {
+      cancelled = true
+      if (activeStream) {
+        activeStream.getTracks().forEach((track) => track.stop())
+      }
+      setLocalStream(null)
+    }
+  }, [isVirtual, playerId])
+
+  React.useEffect(() => {
+    if (!isVirtual || !playerId || !localStream) {
+      return
+    }
+    if (typeof RTCPeerConnection === "undefined") {
+      setMediaError("Video calling isn't supported in this browser.")
+      return
+    }
+
+    const lobbyId = state.lobby.id
+    const channel = supabaseBrowser
+      .channel(`video-${lobbyId}`, {
+        config: { broadcast: { self: false } },
+      })
+      .on("broadcast", { event: "signal" }, async ({ payload }) => {
+        const message = payload as SignalPayload
+        if (!message?.from || message.from === playerId) {
+          return
+        }
+        if (message.to && message.to !== playerId) {
+          return
+        }
+
+        if (message.type === "ready") {
+          if (playerId < message.from) {
+            const peer = createPeerConnection(message.from)
+            const offer = await peer.createOffer()
+            await peer.setLocalDescription(offer)
+            sendSignal({
+              type: "offer",
+              from: playerId,
+              to: message.from,
+              sdp: peer.localDescription ?? offer,
+            })
+          }
+          return
+        }
+
+        if (message.type === "offer" && message.sdp) {
+          const peer = createPeerConnection(message.from)
+          await peer.setRemoteDescription(message.sdp)
+          const answer = await peer.createAnswer()
+          await peer.setLocalDescription(answer)
+          sendSignal({
+            type: "answer",
+            from: playerId,
+            to: message.from,
+            sdp: peer.localDescription ?? answer,
+          })
+          return
+        }
+
+        if (message.type === "answer" && message.sdp) {
+          const peer = createPeerConnection(message.from)
+          await peer.setRemoteDescription(message.sdp)
+          return
+        }
+
+        if (message.type === "ice" && message.candidate) {
+          const peer = createPeerConnection(message.from)
+          await peer.addIceCandidate(message.candidate)
+        }
+      })
+
+    channelRef.current = channel
+
+    channel.subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        channel.send({
+          type: "broadcast",
+          event: "signal",
+          payload: { type: "ready", from: playerId },
+        })
+      }
+    })
+
+    return () => {
+      channelRef.current = null
+      supabaseBrowser.removeChannel(channel)
+      peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
+    }
+  }, [
+    cleanupPeer,
+    createPeerConnection,
+    isVirtual,
+    localStream,
+    playerId,
+    sendSignal,
+    state.lobby.id,
+  ])
+
+  React.useEffect(() => {
+    if (!isVirtual) {
+      return
+    }
+    const activeIds = new Set(state.players.map((player) => player.id))
+    Object.keys(remoteStreams).forEach((peerId) => {
+      if (!activeIds.has(peerId)) {
+        cleanupPeer(peerId)
+      }
+    })
+  }, [cleanupPeer, isVirtual, remoteStreams, state.players])
+
+  React.useEffect(() => {
+    if (isVirtual) {
+      return
+    }
     if (!hasSeenTutorial) {
       return
     }
@@ -95,9 +454,18 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       setShowCard(false)
       setCountdown(10)
     }
-  }, [hasSeenTutorial, isActive, lastTurnIndex, state.lobby.currentTurnIndex])
+  }, [
+    hasSeenTutorial,
+    isActive,
+    isVirtual,
+    lastTurnIndex,
+    state.lobby.currentTurnIndex,
+  ])
 
   React.useEffect(() => {
+    if (isVirtual) {
+      return
+    }
     if (countdown === null) {
       return
     }
@@ -113,7 +481,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     }, 1000)
 
     return () => window.clearTimeout(timer)
-  }, [countdown])
+  }, [countdown, isVirtual])
 
   React.useEffect(() => {
     const lobbyId = initialState.lobby.id
@@ -325,6 +693,154 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     )
   }
 
+  if (isVirtual) {
+    const controlsDisabled = !localStream || Boolean(mediaError)
+    return (
+      <div className="flex min-h-screen flex-col gap-6 px-4 pb-10 pt-8">
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="font-display text-3xl uppercase tracking-wide">
+              Game Time
+            </h1>
+            <p className="text-sm text-black/70">
+              Virtual (Video) · Code: {state.lobby.code}
+            </p>
+          </div>
+          <SecondaryButton type="button" onClick={handleLeave}>
+            Leave Game
+          </SecondaryButton>
+        </header>
+
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            disabled={controlsDisabled}
+            onClick={() => setIsMicMuted((prev) => !prev)}
+            className={`rounded-full border-2 border-black px-4 py-2 text-xs font-semibold uppercase tracking-wide shadow-[2px_2px_0_#000] ${
+              isMicMuted ? "bg-primary text-black" : "bg-offwhite text-black"
+            } disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            {isMicMuted ? "Unmute Mic" : "Mute Mic"}
+          </button>
+          <button
+            type="button"
+            disabled={controlsDisabled}
+            onClick={() => setIsVideoMuted((prev) => !prev)}
+            className={`rounded-full border-2 border-black px-4 py-2 text-xs font-semibold uppercase tracking-wide shadow-[2px_2px_0_#000] ${
+              isVideoMuted ? "bg-primary text-black" : "bg-offwhite text-black"
+            } disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            {isVideoMuted ? "Turn Camera On" : "Turn Camera Off"}
+          </button>
+        </div>
+
+        {mediaError ? (
+          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm font-semibold text-black shadow-[3px_3px_0_#000]">
+            {mediaError}
+          </div>
+        ) : null}
+
+        <div className="relative rounded-3xl border-2 border-black bg-offwhite p-4 shadow-[6px_6px_0_#000]">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-black/70">
+              Live room
+            </p>
+          </div>
+
+          {(() => {
+            const activePlayer = state.players.find(
+              (player) => player.id === state.lobby.activePlayerId
+            )
+            const activeId = activePlayer?.id
+            const otherPlayers = state.players.filter(
+              (player) => player.id !== activeId
+            )
+            const desktopColumns =
+              state.players.length <= 2
+                ? "grid-cols-2"
+                : state.players.length <= 4
+                  ? "grid-cols-2"
+                  : state.players.length <= 6
+                    ? "grid-cols-3"
+                    : "grid-cols-4"
+
+            const renderTile = (player: Player, size: "main" | "thumb") => {
+              const isSelf = player.id === playerId
+              const isGuesser = player.id === state.lobby.activePlayerId
+              const stream = isSelf
+                ? localStream
+                : remoteStreams[player.id] ?? null
+              const showPlaceholder = isGuesser && isSelf
+              const card = isGuesser && !isSelf ? state.photos.currentCard : null
+
+              return (
+                <div
+                  key={player.id}
+                  className={
+                    size === "main"
+                      ? "aspect-[3/4] w-full"
+                      : "aspect-[3/4] w-24 flex-shrink-0"
+                  }
+                >
+                  <VideoTile
+                    stream={stream}
+                    name={player.name}
+                    isActive={isGuesser}
+                    isSelf={isSelf}
+                    showPlaceholder={showPlaceholder}
+                    card={card}
+                  />
+                </div>
+              )
+            }
+
+            return (
+              <div className="mt-4">
+                <div className="flex flex-col gap-3 lg:hidden">
+                  {activePlayer ? (
+                    <div className="w-full">
+                      {renderTile(activePlayer, "main")}
+                    </div>
+                  ) : null}
+                  {otherPlayers.length > 0 ? (
+                    <div className="flex gap-3 overflow-x-auto pb-1">
+                      {otherPlayers.map((player) => renderTile(player, "thumb"))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className={`hidden lg:grid ${desktopColumns} gap-3`}>
+                  {state.players.map((player) => renderTile(player, "main"))}
+                </div>
+              </div>
+            )
+          })()}
+          {isActive ? (
+            <div className="absolute bottom-4 right-4 z-10">
+              <PrimaryButton
+                type="button"
+                onClick={handleNext}
+                disabled={isSubmitting}
+                className="px-5 py-2 text-sm"
+              >
+                {isSubmitting ? "Advancing..." : "Next"}
+              </PrimaryButton>
+            </div>
+          ) : null}
+        </div>
+
+        {!isActive ? (
+          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm text-black/70 shadow-[3px_3px_0_#000]">
+            Give hints without saying the title.
+          </div>
+        ) : null}
+
+        {actionError ? (
+          <p className="text-sm font-semibold text-black">{actionError}</p>
+        ) : null}
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-h-screen flex-col gap-6 px-4 pb-10 pt-8">
       <header className="flex items-start justify-between gap-4">
@@ -402,14 +918,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                 style={{ width: "100dvh", height: "100dvw" }}
               >
                 <div className="relative flex h-full w-full flex-col gap-3 px-4 py-4">
-                  <div className="absolute right-3 top-3 z-30">
-                    <TurnTimer
-                      durationSeconds={30}
-                      secondsLeft={turnTimer.secondsLeft}
-                      progress={turnTimer.progress}
-                      isUrgent={turnTimer.isUrgent}
-                    />
-                  </div>
                   <div className="flex min-h-0 flex-1 items-center justify-center gap-3 pt-8">
                     <div className="flex h-full w-16 items-center justify-center">
                       <SecondaryButton
@@ -438,11 +946,13 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                       </PrimaryButton>
                     </div>
                   </div>
-                  <div className="mx-auto w-full max-w-[90%] rounded-2xl border-2 border-black bg-offwhite px-4 py-2 text-center shadow-[4px_4px_0_#000]">
-                    <h2 className="font-display text-xl uppercase leading-tight tracking-wide text-black sm:text-2xl">
-                      {state.photos.currentCard.title}
-                    </h2>
-                  </div>
+                  {state.photos.currentCard.title ? (
+                    <div className="mx-auto w-full max-w-[90%] rounded-2xl border-2 border-black bg-offwhite px-4 py-2 text-center shadow-[4px_4px_0_#000]">
+                      <h2 className="font-display text-xl uppercase leading-tight tracking-wide text-black sm:text-2xl">
+                        {state.photos.currentCard.title}
+                      </h2>
+                    </div>
+                  ) : null}
                   {keepAwakeEnabled && (!wakeLock.isSupported || wakeLock.hadError) ? (
                     <div className="mx-auto w-full max-w-[90%] rounded-xl border-2 border-black bg-offwhite px-3 py-2 text-center text-xs text-black/70 shadow-[2px_2px_0_#000]">
                       <p>
