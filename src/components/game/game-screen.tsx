@@ -620,7 +620,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                 </div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide">
-                    Hold Phone Up
+                    Hold Phone Up (In Person)
                   </p>
                   <p className="text-sm text-black/80">
                     Active player holds the phone above their head.
