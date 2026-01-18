@@ -35,7 +35,7 @@ function lerp(from: number, to: number, amount: number) {
 }
 
 export function useHeadAnchor(
-  videoRef: React.RefObject<HTMLVideoElement>,
+  videoRef: React.RefObject<HTMLVideoElement | null>,
   enabled: boolean
 ): HeadAnchor {
   const [anchor, setAnchor] = React.useState<HeadAnchor>({
