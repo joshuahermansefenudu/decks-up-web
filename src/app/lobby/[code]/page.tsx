@@ -23,6 +23,7 @@ type LobbyResponse = {
     id: string
     code: string
     status: string
+    mode: "IN_PERSON" | "VIRTUAL"
     createdAt: string
     expiresAt: string
     hostPlayerId: string | null
@@ -143,6 +144,11 @@ export default async function LobbyPage({
             <p className="text-sm text-black/70">
               Share the code and upload up to five photos.
             </p>
+            <Badge variant="outline" className="w-fit">
+              {data.lobby.mode === "VIRTUAL"
+                ? "Virtual (Video) game"
+                : "In-person game"}
+            </Badge>
           </div>
           <div className="shrink-0">
             <LobbyExitButton lobbyCode={data.lobby.code} playerId={playerId} />

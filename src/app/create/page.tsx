@@ -19,6 +19,9 @@ import { SecondaryButton } from "@/components/ui/secondary-button"
 export default function CreatePage() {
   const router = useRouter()
   const [name, setName] = React.useState("")
+  const [playMode, setPlayMode] = React.useState<"in_person" | "virtual">(
+    "in_person"
+  )
   const [error, setError] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
 
@@ -37,7 +40,7 @@ export default function CreatePage() {
       const response = await fetch("/api/lobbies", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, mode: playMode }),
       })
 
       if (!response.ok) {
@@ -89,6 +92,52 @@ export default function CreatePage() {
                   className="mt-2 w-full rounded-xl border-2 border-black bg-offwhite px-4 py-3 text-base shadow-[3px_3px_0_#000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite"
                 />
               </label>
+
+              <div className="space-y-3">
+                <p className="text-sm font-semibold uppercase tracking-wide">
+                  Play mode
+                </p>
+                <div className="flex w-full rounded-full border-2 border-black bg-lightgray p-1 shadow-[3px_3px_0_#000]">
+                  <button
+                    type="button"
+                    onClick={() => setPlayMode("in_person")}
+                    className={`flex flex-1 items-center justify-center rounded-full px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite ${
+                      playMode === "in_person"
+                        ? "bg-offwhite text-black shadow-[2px_2px_0_#000]"
+                        : "bg-transparent text-black/60"
+                    }`}
+                  >
+                    In person
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPlayMode("virtual")}
+                    className={`flex flex-1 items-center justify-center rounded-full px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite ${
+                      playMode === "virtual"
+                        ? "bg-offwhite text-black shadow-[2px_2px_0_#000]"
+                        : "bg-transparent text-black/60"
+                    }`}
+                  >
+                    Virtual (Video)
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border-2 border-black bg-offwhite p-4 shadow-[4px_4px_0_#000]">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/70">
+                    The gameplay
+                  </p>
+                  <div className="mt-3 flex h-32 items-center justify-center rounded-xl border-2 border-dashed border-black/60 bg-lightgray/60 text-sm font-semibold text-black/70">
+                    {playMode === "in_person"
+                      ? "In-person setup placeholder"
+                      : "Virtual setup placeholder"}
+                  </div>
+                  <p className="mt-3 text-sm text-black/70">
+                    {playMode === "in_person"
+                      ? "Hold up your phone above your head when it's your turn."
+                      : "Just like a video call."}
+                  </p>
+                </div>
+              </div>
 
               <PrimaryButton type="submit" disabled={isSubmitting}>
                 {isSubmitting ? "Creating..." : "Create Lobby"}

@@ -19,10 +19,16 @@ enum LobbyStatus {
   ENDED
 }
 
+enum LobbyMode {
+  IN_PERSON
+  VIRTUAL
+}
+
 model Lobby {
   id        String      @id @default(cuid())
   code      String      @unique @db.VarChar(6)
   status    LobbyStatus @default(LOBBY)
+  mode      LobbyMode   @default(IN_PERSON)
   createdAt DateTime    @default(now())
   expiresAt DateTime
   endedAt   DateTime?

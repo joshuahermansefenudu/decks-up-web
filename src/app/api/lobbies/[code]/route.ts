@@ -86,6 +86,7 @@ export async function GET(request: Request, { params }: RouteContext) {
       id: lobby.id,
       code: lobby.code,
       status: lobby.status,
+      mode: lobby.mode,
       expiresAt: lobby.expiresAt,
       hostPlayerId: lobby.hostPlayerId,
       activePlayerId: lobby.activePlayerId,

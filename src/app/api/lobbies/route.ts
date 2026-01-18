@@ -9,10 +9,13 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => null)
     const name = typeof body?.name === "string" ? body.name.trim() : ""
+    const modeRaw = typeof body?.mode === "string" ? body.mode : ""
 
     if (!name) {
       return NextResponse.json({ error: "invalid_name" }, { status: 400 })
     }
+
+    const mode = modeRaw === "virtual" ? "VIRTUAL" : "IN_PERSON"
 
     const code = await generateUniqueLobbyCode(prisma)
     const expiresAt = new Date(Date.now() + LOBBY_TTL_HOURS * 60 * 60 * 1000)
@@ -22,6 +25,7 @@ export async function POST(request: Request) {
         data: {
           code,
           status: "LOBBY",
+          mode,
           expiresAt,
         },
       })
