@@ -157,6 +157,26 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const channelRef = React.useRef<ReturnType<
     typeof supabaseBrowser.channel
   > | null>(null)
+  const iceServers = React.useMemo(() => {
+    const servers: RTCIceServer[] = [
+      { urls: "stun:stun.l.google.com:19302" },
+    ]
+    const turnUrl = process.env.NEXT_PUBLIC_TURN_URL ?? ""
+    const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME ?? ""
+    const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? ""
+    const turnUrls = turnUrl
+      .split(",")
+      .map((url) => url.trim())
+      .filter(Boolean)
+    if (turnUrls.length && turnUsername && turnCredential) {
+      servers.push({
+        urls: turnUrls,
+        username: turnUsername,
+        credential: turnCredential,
+      })
+    }
+    return servers
+  }, [])
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -211,7 +231,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       }
 
       const connection = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+        iceServers,
       })
 
       if (localStream) {
@@ -261,7 +281,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       peersRef.current.set(peerId, connection)
       return connection
     },
-    [cleanupPeer, localStream, playerId, sendSignal]
+    [cleanupPeer, iceServers, localStream, playerId, sendSignal]
   )
 
   const isVirtual = state.lobby.mode === "VIRTUAL"
@@ -756,11 +776,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               (player) => player.id !== activeId
             )
             const desktopColumns =
-              state.players.length <= 2
+              otherPlayers.length <= 2
                 ? "grid-cols-2"
-                : state.players.length <= 4
+                : otherPlayers.length <= 4
                   ? "grid-cols-2"
-                  : state.players.length <= 6
+                  : otherPlayers.length <= 6
                     ? "grid-cols-3"
                     : "grid-cols-4"
 
@@ -796,7 +816,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
             return (
               <div className="mt-4">
-                <div className="flex flex-col gap-3 lg:hidden">
+                <div className="flex flex-col gap-3 md:hidden">
                   {activePlayer ? (
                     <div className="w-full">
                       {renderTile(activePlayer, "main")}
@@ -808,8 +828,19 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                     </div>
                   ) : null}
                 </div>
-                <div className={`hidden lg:grid ${desktopColumns} gap-3`}>
-                  {state.players.map((player) => renderTile(player, "main"))}
+                <div className="hidden md:flex gap-4">
+                  <div className="w-1/2">
+                    {activePlayer ? renderTile(activePlayer, "main") : null}
+                  </div>
+                  <div className="w-1/2">
+                    {otherPlayers.length > 0 ? (
+                      <div className={`grid ${desktopColumns} gap-3`}>
+                        {otherPlayers.map((player) =>
+                          renderTile(player, "main")
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             )
