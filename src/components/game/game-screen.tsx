@@ -775,16 +775,21 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             const otherPlayers = state.players.filter(
               (player) => player.id !== activeId
             )
-            const desktopColumns =
-              otherPlayers.length <= 2
-                ? "grid-cols-2"
-                : otherPlayers.length <= 4
-                  ? "grid-cols-2"
-                  : otherPlayers.length <= 6
-                    ? "grid-cols-3"
-                    : "grid-cols-4"
+            const desktopGrid =
+              otherPlayers.length <= 1
+                ? { cols: "grid-cols-1", rows: "grid-rows-1" }
+                : otherPlayers.length <= 2
+                  ? { cols: "grid-cols-2", rows: "grid-rows-1" }
+                  : otherPlayers.length <= 4
+                    ? { cols: "grid-cols-2", rows: "grid-rows-2" }
+                    : otherPlayers.length <= 6
+                      ? { cols: "grid-cols-3", rows: "grid-rows-2" }
+                      : { cols: "grid-cols-3", rows: "grid-rows-3" }
 
-            const renderTile = (player: Player, size: "main" | "thumb") => {
+            const renderTile = (
+              player: Player,
+              size: "main" | "thumb" | "panel"
+            ) => {
               const isSelf = player.id === playerId
               const isGuesser = player.id === state.lobby.activePlayerId
               const stream = isSelf
@@ -797,9 +802,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                 <div
                   key={player.id}
                   className={
-                    size === "main"
-                      ? "aspect-[3/4] w-full"
-                      : "aspect-[3/4] w-24 flex-shrink-0"
+                    size === "panel"
+                      ? "h-full w-full"
+                      : size === "main"
+                        ? "aspect-[3/4] w-full"
+                        : "aspect-[3/4] w-24 flex-shrink-0"
                   }
                 >
                   <VideoTile
@@ -828,15 +835,17 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                     </div>
                   ) : null}
                 </div>
-                <div className="hidden md:flex gap-4">
-                  <div className="w-1/2">
-                    {activePlayer ? renderTile(activePlayer, "main") : null}
+                <div className="hidden md:flex min-h-[520px] items-stretch gap-4">
+                  <div className="w-1/2 h-full">
+                    {activePlayer ? renderTile(activePlayer, "panel") : null}
                   </div>
-                  <div className="w-1/2">
+                  <div className="w-1/2 h-full">
                     {otherPlayers.length > 0 ? (
-                      <div className={`grid ${desktopColumns} gap-3`}>
+                      <div
+                        className={`grid h-full min-h-0 auto-rows-fr ${desktopGrid.cols} ${desktopGrid.rows} gap-3`}
+                      >
                         {otherPlayers.map((player) =>
-                          renderTile(player, "main")
+                          renderTile(player, "panel")
                         )}
                       </div>
                     ) : null}
