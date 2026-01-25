@@ -716,7 +716,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   if (isVirtual) {
     const controlsDisabled = !localStream || Boolean(mediaError)
     return (
-      <div className="flex min-h-screen flex-col gap-6 px-4 pb-10 pt-8">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-4 pb-10 pt-8">
         <header className="flex items-start justify-between gap-4">
           <div>
             <h1 className="font-display text-3xl uppercase tracking-wide">
