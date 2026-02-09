@@ -14,6 +14,10 @@ import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
 import AdSlot from "@/components/ads/AdSlot"
 
+const FEEDBACK_FORM_URL =
+  process.env.NEXT_PUBLIC_FEEDBACK_FORM_URL?.trim() ||
+  "https://docs.google.com/forms/d/e/1FAIpQLScnT3O2wxHikAl1w5PpMY6L4efPyuN_DoDi08mUng74I-dcBQ/viewform?usp=publish-editor"
+
 export default function HomePage() {
   return (
     <PageContainer>
@@ -37,10 +41,10 @@ export default function HomePage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <PrimaryButton asChild>
-              <Link href="/create">Create Game</Link>
+              <Link href="/play-access?next=create">Create Game</Link>
             </PrimaryButton>
             <SecondaryButton asChild>
-              <Link href="/join">Join Game</Link>
+              <Link href="/play-access?next=join">Join Game</Link>
             </SecondaryButton>
           </CardContent>
         </Card>
@@ -68,6 +72,17 @@ export default function HomePage() {
             </div>
           </CardContent>
         </Card>
+
+        <div className="flex justify-center">
+          <a
+            href={FEEDBACK_FORM_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center rounded-md border border-black/40 bg-offwhite/80 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-black/70 transition-colors hover:bg-offwhite"
+          >
+            Give Feedback / Report Bug
+          </a>
+        </div>
       </Stack>
     </PageContainer>
   )

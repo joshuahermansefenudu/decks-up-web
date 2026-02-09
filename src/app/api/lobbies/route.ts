@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 
+import { getOptionalAuthUser } from "@/lib/auth-user"
 import { generateUniqueLobbyCode } from "@/lib/lobby-code"
 import { prisma } from "@/lib/prisma"
 
@@ -7,6 +8,7 @@ const LOBBY_TTL_HOURS = 12
 
 export async function POST(request: Request) {
   try {
+    const { user } = await getOptionalAuthUser(request)
     const body = await request.json().catch(() => null)
     const name = typeof body?.name === "string" ? body.name.trim() : ""
     const modeRaw = typeof body?.mode === "string" ? body.mode : ""
@@ -33,6 +35,7 @@ export async function POST(request: Request) {
       const player = await tx.player.create({
         data: {
           lobbyId: lobby.id,
+          authUserId: user?.id ?? null,
           name,
           isHost: true,
         },

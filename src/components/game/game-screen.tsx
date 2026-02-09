@@ -12,6 +12,10 @@ import { useTurnTimer } from "@/hooks/useTurnTimer"
 import { useHeadAnchor } from "@/lib/virtual/useHeadAnchor"
 import { TurnOverlayCard } from "@/components/virtual/TurnOverlayCard"
 
+const FEEDBACK_FORM_URL =
+  process.env.NEXT_PUBLIC_FEEDBACK_FORM_URL?.trim() ||
+  "https://docs.google.com/forms/d/e/1FAIpQLScnT3O2wxHikAl1w5PpMY6L4efPyuN_DoDi08mUng74I-dcBQ/viewform?usp=publish-editor"
+
 type Player = {
   id: string
   name: string
@@ -614,6 +618,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         >
           Back Home
         </SecondaryButton>
+        <a
+          href={FEEDBACK_FORM_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center rounded-md border border-black/40 bg-offwhite/80 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-black/70 transition-colors hover:bg-offwhite"
+        >
+          Give Feedback / Report Bug
+        </a>
         <AdSlot slot="RESULTS_BANNER" className="mt-6 flex justify-center" />
       </div>
     )

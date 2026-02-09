@@ -11,12 +11,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
 import { getBaseUrl } from "@/lib/base-url"
 import { LobbyRealtime } from "@/components/lobby/lobby-realtime"
 import { LobbyExitButton } from "@/components/lobby/lobby-exit-button"
 import AdSlot from "@/components/ads/AdSlot"
 import { LobbyCode } from "@/components/lobby/lobby-code"
+import { LobbyPlayersCard } from "@/components/lobby/lobby-players-card"
 
 type LobbyResponse = {
   lobby: {
@@ -124,6 +126,37 @@ export default async function LobbyPage({
   const selfPlayer = playerId
     ? data.players.find((player) => player.id === playerId)
     : undefined
+
+  if (playerId && !selfPlayer) {
+    return (
+      <PageContainer>
+        <Stack className="gap-6">
+          <header className="space-y-2">
+            <h1 className="font-display text-3xl uppercase tracking-wide">
+              Removed From Lobby
+            </h1>
+            <p className="text-sm text-black/70">
+              You were removed from the game lobby by the host.
+            </p>
+          </header>
+          <Card>
+            <CardHeader>
+              <CardTitle>Access ended</CardTitle>
+              <CardDescription>
+                You can return home and join or create a new game.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <PrimaryButton asChild className="w-full">
+                <Link href="/">Return Home</Link>
+              </PrimaryButton>
+            </CardContent>
+          </Card>
+        </Stack>
+      </PageContainer>
+    )
+  }
+
   const isHost =
     Boolean(selfPlayer?.isHost) || data.lobby.hostPlayerId === playerId
 
@@ -165,35 +198,13 @@ export default async function LobbyPage({
               <LobbyCode code={data.lobby.code} />
             </CardContent>
           </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Players ({playersCount}/8)</CardTitle>
-              <CardDescription>Waiting for players to join.</CardDescription>
-            </CardHeader>
-            <CardContent className="text-sm text-black/70">
-              {playersCount === 0 ? (
-                "No one has joined yet."
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {data.players.map((player) => (
-                    <li
-                      key={player.id}
-                      className="flex items-center justify-between rounded-lg border-2 border-black bg-offwhite px-3 py-2 shadow-[2px_2px_0_#000]"
-                    >
-                      <span className="font-semibold">
-                        {player.name}
-                        {player.isHost ? " (Host)" : ""}
-                      </span>
-                      <Badge variant="outline" className="min-w-[56px] justify-center">
-                        {Math.min(player.photoCount, 5)}/5
-                      </Badge>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
+          <LobbyPlayersCard
+            lobbyCode={data.lobby.code}
+            lobbyStatus={data.lobby.status}
+            players={data.players}
+            currentPlayerId={playerId}
+            isHost={isHost}
+          />
         </div>
 
         <AdSlot slot="LOBBY_BANNER" className="mt-6 flex justify-center" />

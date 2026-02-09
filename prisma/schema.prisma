@@ -44,6 +44,7 @@ model Lobby {
 model Player {
   id        String   @id @default(cuid())
   lobbyId   String
+  authUserId String?
   name      String
   isHost    Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -53,6 +54,7 @@ model Player {
   photos Photo[]
 
   @@index([lobbyId])
+  @@index([authUserId])
 }
 
 model Photo {
@@ -70,4 +72,14 @@ model Photo {
 
   @@index([lobbyId])
   @@index([playerId])
+}
+
+model AccountPhoto {
+  id          String   @id @default(cuid())
+  userId      String
+  storagePath String   @unique
+  publicUrl   String
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
 }

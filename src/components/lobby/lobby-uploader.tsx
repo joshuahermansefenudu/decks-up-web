@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import * as React from "react"
 import { useRouter } from "next/navigation"
 
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
 const MAX_PHOTOS = 5
 
@@ -26,8 +28,14 @@ type UploadedPhoto = {
 type PhotoItem = {
   id: string
   file: File
-  status: "pending" | "uploading" | "error"
+  status: "uploading" | "error"
   error?: string
+}
+
+type AccountPhoto = {
+  id: string
+  publicUrl: string
+  createdAt: string
 }
 
 type LobbyUploaderProps = {
@@ -56,6 +64,11 @@ function LobbyUploader({
   const [removeErrors, setRemoveErrors] = React.useState<Record<string, string>>(
     {}
   )
+  const [accountPhotos, setAccountPhotos] = React.useState<AccountPhoto[]>([])
+  const [accountToken, setAccountToken] = React.useState("")
+  const [accountError, setAccountError] = React.useState("")
+  const [isAccountLoading, setIsAccountLoading] = React.useState(true)
+  const [usingPhotoIds, setUsingPhotoIds] = React.useState<string[]>([])
   const [removingIds, setRemovingIds] = React.useState<string[]>([])
   const [startError, setStartError] = React.useState("")
   const [isStarting, setIsStarting] = React.useState(false)
@@ -64,86 +77,79 @@ function LobbyUploader({
     setUploadedPhotos(initialPhotos)
   }, [initialPhotos])
 
-  const handleFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? [])
-    if (files.length === 0) {
-      return
+  React.useEffect(() => {
+    let isMounted = true
+
+    const syncSession = async () => {
+      const { data } = await supabaseBrowser.auth.getSession()
+      if (!isMounted) {
+        return
+      }
+      setAccountToken(data.session?.access_token ?? "")
+      setIsAccountLoading(false)
     }
 
-    setItems((current) => {
-      const slots = MAX_PHOTOS - (current.length + uploadedPhotos.length)
-      const accepted = files.slice(0, Math.max(slots, 0))
-      setLimitMessage(
-        accepted.length < files.length
-          ? "Only five photos are allowed for now."
-          : ""
-      )
+    void syncSession()
 
-      const nextItems = accepted.map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        status: "pending" as const,
-      }))
-
-      return [...current, ...nextItems]
-    })
-
-    event.target.value = ""
-  }
-
-  const handleUpload = async (itemId: string) => {
-    const item = items.find((entry) => entry.id === itemId)
-    if (!item) {
-      return
-    }
-
-    if (!playerId) {
-      setItems((current) =>
-        current.map((entry) =>
-          entry.id === itemId
-            ? {
-                ...entry,
-                status: "error",
-                error: "Missing player id.",
-              }
-            : entry
-        )
-      )
-      return
-    }
-
-    setItems((current) =>
-      current.map((entry) =>
-        entry.id === itemId
-          ? {
-              ...entry,
-              status: "uploading",
-              error: undefined,
-            }
-          : entry
-      )
+    const { data: subscription } = supabaseBrowser.auth.onAuthStateChange(
+      (_event, session) => {
+        setAccountToken(session?.access_token ?? "")
+      }
     )
 
-    const formData = new FormData()
-    formData.append("file", item.file)
-    formData.append("lobbyCode", lobbyCode)
-    formData.append("playerId", playerId)
+    return () => {
+      isMounted = false
+      subscription.subscription.unsubscribe()
+    }
+  }, [])
+
+  const fetchAccountPhotos = React.useCallback(async () => {
+    if (!accountToken) {
+      setAccountPhotos([])
+      setAccountError("")
+      setIsAccountLoading(false)
+      return
+    }
+
+    setIsAccountLoading(true)
+    setAccountError("")
 
     try {
-      const response = await fetch("/api/photos/upload", {
-        method: "POST",
-        body: formData,
+      const response = await fetch("/api/account/photos", {
+        headers: {
+          Authorization: `Bearer ${accountToken}`,
+        },
       })
       const payload = await response.json().catch(() => ({}))
-
       if (!response.ok) {
+        setAccountError(payload?.error ?? "Unable to load saved photos.")
+        setAccountPhotos([])
+        return
+      }
+
+      setAccountPhotos(Array.isArray(payload?.photos) ? payload.photos : [])
+    } catch {
+      setAccountError("Unable to load saved photos.")
+      setAccountPhotos([])
+    } finally {
+      setIsAccountLoading(false)
+    }
+  }, [accountToken])
+
+  React.useEffect(() => {
+    void fetchAccountPhotos()
+  }, [fetchAccountPhotos])
+
+  const uploadFile = React.useCallback(
+    async (itemId: string, file: File) => {
+      if (!playerId) {
         setItems((current) =>
           current.map((entry) =>
             entry.id === itemId
               ? {
                   ...entry,
                   status: "error",
-                  error: payload?.error ?? "Upload failed.",
+                  error: "Missing player id.",
                 }
               : entry
           )
@@ -151,28 +157,147 @@ function LobbyUploader({
         return
       }
 
-      setUploadedPhotos((current) => [...current, payload.photo])
-      setItems((current) => current.filter((entry) => entry.id !== itemId))
-      router.refresh()
-    } catch {
       setItems((current) =>
         current.map((entry) =>
           entry.id === itemId
             ? {
                 ...entry,
-                status: "error",
-                error: "Upload failed.",
+                status: "uploading",
+                error: undefined,
               }
             : entry
         )
       )
+
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("lobbyCode", lobbyCode)
+      formData.append("playerId", playerId)
+
+      try {
+        const response = await fetch("/api/photos/upload", {
+          method: "POST",
+          body: formData,
+        })
+        const payload = await response.json().catch(() => ({}))
+
+        if (!response.ok) {
+          setItems((current) =>
+            current.map((entry) =>
+              entry.id === itemId
+                ? {
+                    ...entry,
+                    status: "error",
+                    error: payload?.error ?? "Upload failed.",
+                  }
+                : entry
+            )
+          )
+          return
+        }
+
+        setUploadedPhotos((current) => [...current, payload.photo])
+        setItems((current) => current.filter((entry) => entry.id !== itemId))
+        router.refresh()
+      } catch {
+        setItems((current) =>
+          current.map((entry) =>
+            entry.id === itemId
+              ? {
+                  ...entry,
+                  status: "error",
+                  error: "Upload failed.",
+                }
+              : entry
+          )
+        )
+      }
+    },
+    [lobbyCode, playerId, router]
+  )
+
+  const handleFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    if (files.length === 0) {
+      return
     }
+
+    const slots = MAX_PHOTOS - (items.length + uploadedPhotos.length)
+    const accepted = files.slice(0, Math.max(slots, 0))
+    setLimitMessage(
+      accepted.length < files.length ? "Only five photos are allowed for now." : ""
+    )
+
+    if (accepted.length === 0) {
+      event.target.value = ""
+      return
+    }
+
+    const nextItems = accepted.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      status: "uploading" as const,
+    }))
+
+    setItems((current) => [...current, ...nextItems])
+    nextItems.forEach((item) => {
+      void uploadFile(item.id, item.file)
+    })
+
+    event.target.value = ""
   }
 
   const totalSelected = items.length + uploadedPhotos.length
   const isAtLimit = totalSelected >= MAX_PHOTOS
   const canStartGame =
     isHost && lobbyStatus === "LOBBY" && totalPhotos >= 1 && Boolean(playerId)
+
+  const handleUseSavedPhoto = async (savedPhotoId: string) => {
+    if (!playerId) {
+      setAccountError("Missing player id.")
+      return
+    }
+
+    if (!accountToken) {
+      setAccountError("Sign in to use saved photos.")
+      return
+    }
+
+    if (items.length + uploadedPhotos.length >= MAX_PHOTOS) {
+      setLimitMessage("Only five photos are allowed for now.")
+      return
+    }
+
+    setAccountError("")
+    setUsingPhotoIds((current) => [...current, savedPhotoId])
+
+    try {
+      const response = await fetch("/api/photos/from-library", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accountToken}`,
+        },
+        body: JSON.stringify({
+          libraryPhotoId: savedPhotoId,
+          lobbyCode,
+          playerId,
+        }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setAccountError(payload?.error ?? "Unable to use saved photo.")
+        return
+      }
+
+      setUploadedPhotos((current) => [...current, payload.photo])
+      router.refresh()
+    } catch {
+      setAccountError("Unable to use saved photo.")
+    } finally {
+      setUsingPhotoIds((current) => current.filter((id) => id !== savedPhotoId))
+    }
+  }
 
   const handleRemoveUploaded = async (photoId: string) => {
     if (!playerId) {
@@ -327,6 +452,57 @@ function LobbyUploader({
           </div>
         ) : null}
 
+        <div className="rounded-xl border-2 border-black bg-offwhite p-4 shadow-[3px_3px_0_#000]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-black/70">
+            Saved account photos
+          </p>
+          {!accountToken ? (
+            <p className="mt-2 text-sm text-black/70">
+              Sign in on the{" "}
+              <Link href="/account" className="font-semibold underline">
+                Account page
+              </Link>{" "}
+              to reuse photos in lobbies.
+            </p>
+          ) : isAccountLoading ? (
+            <p className="mt-2 text-sm text-black/70">Loading saved photos...</p>
+          ) : accountPhotos.length === 0 ? (
+            <p className="mt-2 text-sm text-black/70">
+              No saved photos yet. Upload some in your account.
+            </p>
+          ) : (
+            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {accountPhotos.map((photo) => (
+                <div
+                  key={photo.id}
+                  className="rounded-xl border-2 border-black bg-lightgray p-2 shadow-[2px_2px_0_#000]"
+                >
+                  <img
+                    src={photo.publicUrl}
+                    alt="Saved account photo"
+                    className="h-20 w-full rounded-lg border-2 border-black object-cover"
+                    loading="lazy"
+                  />
+                  <SecondaryButton
+                    type="button"
+                    className="mt-2 w-full px-2 py-1 text-xs"
+                    disabled={
+                      usingPhotoIds.includes(photo.id) ||
+                      items.length + uploadedPhotos.length >= MAX_PHOTOS
+                    }
+                    onClick={() => void handleUseSavedPhoto(photo.id)}
+                  >
+                    {usingPhotoIds.includes(photo.id) ? "Adding..." : "Use photo"}
+                  </SecondaryButton>
+                </div>
+              ))}
+            </div>
+          )}
+          {accountError ? (
+            <p className="mt-3 text-sm font-semibold text-black">{accountError}</p>
+          ) : null}
+        </div>
+
         {items.length > 0 ? (
           <div className="flex flex-col gap-3">
             {items.map((item, index) => (
@@ -340,19 +516,25 @@ function LobbyUploader({
                 <p className="text-sm font-medium text-black/80">
                   {item.file.name}
                 </p>
+                {item.status === "uploading" ? (
+                  <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-black/70">
+                    Uploading...
+                  </p>
+                ) : null}
                 {item.error ? (
                   <p className="mt-2 text-sm font-semibold text-black">
                     {item.error}
                   </p>
                 ) : null}
-                <PrimaryButton
-                  type="button"
-                  className="mt-3 w-full"
-                  disabled={item.status === "uploading"}
-                  onClick={() => handleUpload(item.id)}
-                >
-                  {item.status === "uploading" ? "Uploading..." : "Upload"}
-                </PrimaryButton>
+                {item.status === "error" ? (
+                  <SecondaryButton
+                    type="button"
+                    className="mt-3 w-full"
+                    onClick={() => void uploadFile(item.id, item.file)}
+                  >
+                    Retry upload
+                  </SecondaryButton>
+                ) : null}
               </div>
             ))}
           </div>

@@ -15,12 +15,13 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function CreatePage() {
   const router = useRouter()
   const [name, setName] = React.useState("")
   const [playMode, setPlayMode] = React.useState<"in_person" | "virtual">(
-    "in_person"
+    "virtual"
   )
   const [error, setError] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
@@ -37,9 +38,14 @@ export default function CreatePage() {
     setIsSubmitting(true)
 
     try {
+      const { data } = await supabaseBrowser.auth.getSession()
+      const accessToken = data.session?.access_token ?? ""
       const response = await fetch("/api/lobbies", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: JSON.stringify({ name, mode: playMode }),
       })
 

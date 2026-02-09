@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 
+import { getOptionalAuthUser } from "@/lib/auth-user"
 import { expireLobbyIfNeeded } from "@/lib/lobby-expiration"
 import { prisma } from "@/lib/prisma"
 
@@ -10,6 +11,7 @@ function normalizeCode(code: string) {
 }
 
 export async function POST(request: Request) {
+  const { user } = await getOptionalAuthUser(request)
   const body = await request.json().catch(() => null)
   const name = typeof body?.name === "string" ? body.name.trim() : ""
   const codeRaw = typeof body?.code === "string" ? body.code.trim() : ""
@@ -46,6 +48,7 @@ export async function POST(request: Request) {
   const player = await prisma.player.create({
     data: {
       lobbyId: lobby.id,
+      authUserId: user?.id ?? null,
       name,
       isHost: false,
     },

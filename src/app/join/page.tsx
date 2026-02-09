@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { supabaseBrowser } from "@/lib/supabase-browser"
 
 const errorMessages: Record<string, string> = {
   invalid_request: "Add your name and a lobby code.",
@@ -29,7 +30,34 @@ export default function JoinPage() {
   const [name, setName] = React.useState("")
   const [code, setCode] = React.useState("")
   const [error, setError] = React.useState("")
+  const [toastMessage, setToastMessage] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+
+  React.useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search)
+    const status = searchParams.get("status")
+    const codeParam = searchParams.get("code")
+
+    if (status === "removed_by_host") {
+      setToastMessage("You were removed from the lobby by the host.")
+    }
+
+    if (codeParam) {
+      setCode(codeParam.toUpperCase())
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (!toastMessage) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setToastMessage("")
+    }, 5000)
+
+    return () => window.clearTimeout(timer)
+  }, [toastMessage])
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -43,9 +71,14 @@ export default function JoinPage() {
     setIsSubmitting(true)
 
     try {
+      const { data } = await supabaseBrowser.auth.getSession()
+      const accessToken = data.session?.access_token ?? ""
       const response = await fetch("/api/lobbies/join", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
         body: JSON.stringify({ name, code }),
       })
 
@@ -70,6 +103,14 @@ export default function JoinPage() {
   return (
     <PageContainer>
       <Stack className="gap-6">
+        {toastMessage ? (
+          <div
+            role="status"
+            className="rounded-xl border-2 border-black bg-primary px-4 py-3 text-sm font-semibold text-black shadow-[3px_3px_0_#000]"
+          >
+            {toastMessage}
+          </div>
+        ) : null}
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             Join Game

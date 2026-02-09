@@ -1,11 +1,16 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 type LobbyRow = { status: string; [key: string]: any }
+type PlayerRowPayload = {
+  eventType: "INSERT" | "UPDATE" | "DELETE"
+  new: { id?: string } | null
+  old: { id?: string } | null
+}
 
 type LobbyRealtimeProps = {
   lobbyId: string
@@ -21,6 +26,7 @@ function LobbyRealtime({
   lobbyStatus,
 }: LobbyRealtimeProps) {
   const router = useRouter()
+  const hasRedirectedRef = useRef(false)
 
   useEffect(() => {
     if (!lobbyId) {
@@ -37,7 +43,20 @@ function LobbyRealtime({
           table: "Player",
           filter: `lobbyId=eq.${lobbyId}`,
         },
-        () => router.refresh()
+        (payload: PlayerRowPayload) => {
+          if (
+            !hasRedirectedRef.current &&
+            playerId &&
+            payload.eventType === "DELETE" &&
+            payload.old?.id === playerId
+          ) {
+            hasRedirectedRef.current = true
+            router.replace(`/removed?code=${encodeURIComponent(lobbyCode)}`)
+            return
+          }
+
+          router.refresh()
+        }
       )
       .on(
         "postgres_changes",
@@ -71,6 +90,9 @@ function LobbyRealtime({
       .subscribe()
 
     const refreshInterval = window.setInterval(() => {
+      if (hasRedirectedRef.current) {
+        return
+      }
       router.refresh()
     }, 5000)
 
