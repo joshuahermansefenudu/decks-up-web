@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
-import { supabaseBrowser } from "@/lib/supabase-browser"
+import { getAccessTokenSafe } from "@/lib/safe-auth"
 
 export default function CreatePage() {
   const router = useRouter()
@@ -38,8 +38,7 @@ export default function CreatePage() {
     setIsSubmitting(true)
 
     try {
-      const { data } = await supabaseBrowser.auth.getSession()
-      const accessToken = data.session?.access_token ?? ""
+      const accessToken = await getAccessTokenSafe()
       const response = await fetch("/api/lobbies", {
         method: "POST",
         headers: {

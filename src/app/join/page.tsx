@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
-import { supabaseBrowser } from "@/lib/supabase-browser"
+import { getAccessTokenSafe } from "@/lib/safe-auth"
 
 const errorMessages: Record<string, string> = {
   invalid_request: "Add your name and a lobby code.",
@@ -71,8 +71,7 @@ export default function JoinPage() {
     setIsSubmitting(true)
 
     try {
-      const { data } = await supabaseBrowser.auth.getSession()
-      const accessToken = data.session?.access_token ?? ""
+      const accessToken = await getAccessTokenSafe()
       const response = await fetch("/api/lobbies/join", {
         method: "POST",
         headers: {

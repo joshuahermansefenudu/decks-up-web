@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { getAccessTokenSafe } from "@/lib/safe-auth"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 const MAX_PHOTOS = 5
@@ -81,11 +82,15 @@ function LobbyUploader({
     let isMounted = true
 
     const syncSession = async () => {
-      const { data } = await supabaseBrowser.auth.getSession()
       if (!isMounted) {
         return
       }
-      setAccountToken(data.session?.access_token ?? "")
+
+      const token = await getAccessTokenSafe()
+      if (!isMounted) {
+        return
+      }
+      setAccountToken(token)
       setIsAccountLoading(false)
     }
 
