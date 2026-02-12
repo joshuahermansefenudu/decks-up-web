@@ -20,6 +20,7 @@ import { supabaseBrowser } from "@/lib/supabase-browser"
 export default function PlayAccessPage() {
   const [session, setSession] = React.useState<Session | null>(null)
   const [isSessionLoading, setIsSessionLoading] = React.useState(true)
+  const [sessionCheckError, setSessionCheckError] = React.useState("")
   const [nextPath, setNextPath] = React.useState<"/create" | "/join">("/create")
 
   React.useEffect(() => {
@@ -29,13 +30,59 @@ export default function PlayAccessPage() {
 
     let isMounted = true
 
-    const init = async () => {
-      const { data } = await supabaseBrowser.auth.getSession()
-      if (!isMounted) {
-        return
+    const getSessionWithTimeout = async (timeoutMs: number) => {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined
+
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                "Account check timed out. You can continue as a guest."
+              )
+            )
+          }, timeoutMs)
+        })
+
+        return (await Promise.race([
+          supabaseBrowser.auth.getSession(),
+          timeoutPromise,
+        ])) as Awaited<ReturnType<typeof supabaseBrowser.auth.getSession>>
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+        }
       }
-      setSession(data.session ?? null)
-      setIsSessionLoading(false)
+    }
+
+    const init = async () => {
+      try {
+        const { data, error } = await getSessionWithTimeout(4500)
+
+        if (!isMounted) {
+          return
+        }
+
+        if (error) {
+          setSession(null)
+          setSessionCheckError(error.message)
+          return
+        }
+
+        setSession(data.session ?? null)
+        setSessionCheckError("")
+      } catch (error) {
+        if (!isMounted) {
+          return
+        }
+
+        setSession(null)
+        setSessionCheckError(String((error as Error)?.message ?? error))
+      } finally {
+        if (isMounted) {
+          setIsSessionLoading(false)
+        }
+      }
     }
 
     void init()
@@ -43,6 +90,8 @@ export default function PlayAccessPage() {
     const { data: subscription } = supabaseBrowser.auth.onAuthStateChange(
       (_event, currentSession) => {
         setSession(currentSession)
+        setSessionCheckError("")
+        setIsSessionLoading(false)
       }
     )
 
@@ -73,6 +122,14 @@ export default function PlayAccessPage() {
           <Card>
             <CardContent className="py-6 text-sm text-black/70">
               Checking account status...
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!isSessionLoading && sessionCheckError ? (
+          <Card>
+            <CardContent className="py-6 text-sm text-black/70">
+              {sessionCheckError}
             </CardContent>
           </Card>
         ) : null}

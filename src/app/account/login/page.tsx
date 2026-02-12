@@ -64,8 +64,8 @@ export default function AccountLoginPage() {
       }
 
       router.push(nextPath || "/account")
-    } catch {
-      setError("Unable to sign in right now.")
+    } catch (error) {
+      setError(String((error as Error)?.message ?? error))
     } finally {
       setIsSubmitting(false)
     }
@@ -96,8 +96,8 @@ export default function AccountLoginPage() {
       }
 
       setMessage("Password reset email sent. Check your inbox.")
-    } catch {
-      setError("Unable to send reset email.")
+    } catch (error) {
+      setError(String((error as Error)?.message ?? error))
     } finally {
       setIsRecovering(false)
     }
