@@ -7,4 +7,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY")
 }
 
-export const supabaseBrowser = createClient(supabaseUrl, supabaseAnonKey)
+export const supabaseBrowser = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    // Avoid background refresh loops throwing uncaught fetch errors
+    // when auth is temporarily unreachable. Session checks are done explicitly.
+    autoRefreshToken: false,
+    persistSession: true,
+    detectSessionInUrl: true,
+  },
+})

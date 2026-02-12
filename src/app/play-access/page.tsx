@@ -19,7 +19,7 @@ import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function PlayAccessPage() {
   const [session, setSession] = React.useState<Session | null>(null)
-  const [isSessionLoading, setIsSessionLoading] = React.useState(true)
+  const [isCheckingSession, setIsCheckingSession] = React.useState(true)
   const [sessionCheckError, setSessionCheckError] = React.useState("")
   const [nextPath, setNextPath] = React.useState<"/create" | "/join">("/create")
 
@@ -38,7 +38,7 @@ export default function PlayAccessPage() {
           timeoutId = setTimeout(() => {
             reject(
               new Error(
-                "Account check timed out. You can continue as a guest."
+                "Account check is unavailable right now. You can continue as a guest."
               )
             )
           }, timeoutMs)
@@ -80,7 +80,7 @@ export default function PlayAccessPage() {
         setSessionCheckError(String((error as Error)?.message ?? error))
       } finally {
         if (isMounted) {
-          setIsSessionLoading(false)
+          setIsCheckingSession(false)
         }
       }
     }
@@ -91,7 +91,7 @@ export default function PlayAccessPage() {
       (_event, currentSession) => {
         setSession(currentSession)
         setSessionCheckError("")
-        setIsSessionLoading(false)
+        setIsCheckingSession(false)
       }
     )
 
@@ -118,23 +118,19 @@ export default function PlayAccessPage() {
           </p>
         </header>
 
-        {isSessionLoading ? (
-          <Card>
-            <CardContent className="py-6 text-sm text-black/70">
-              Checking account status...
-            </CardContent>
-          </Card>
+        {isCheckingSession ? (
+          <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+            Checking account status...
+          </p>
         ) : null}
 
-        {!isSessionLoading && sessionCheckError ? (
-          <Card>
-            <CardContent className="py-6 text-sm text-black/70">
-              {sessionCheckError}
-            </CardContent>
-          </Card>
+        {!isCheckingSession && sessionCheckError ? (
+          <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+            {sessionCheckError}
+          </p>
         ) : null}
 
-        {!isSessionLoading && !isLoggedIn ? (
+        {!isLoggedIn ? (
           <Card>
             <CardHeader>
               <CardTitle>Continue as guest</CardTitle>
@@ -150,7 +146,7 @@ export default function PlayAccessPage() {
           </Card>
         ) : null}
 
-        {!isSessionLoading && isLoggedIn ? (
+        {isLoggedIn ? (
           <Card>
             <CardHeader>
               <CardTitle>Continue as signed-in user</CardTitle>
@@ -171,7 +167,7 @@ export default function PlayAccessPage() {
           </Card>
         ) : null}
 
-        {!isSessionLoading && !isLoggedIn ? (
+        {!isLoggedIn ? (
           <Card>
             <CardHeader>
               <CardTitle>Login or create account</CardTitle>
