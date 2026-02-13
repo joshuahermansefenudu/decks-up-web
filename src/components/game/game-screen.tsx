@@ -163,6 +163,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
   const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
   const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
+  const offerAttemptAtRef = React.useRef<Map<string, number>>(new Map())
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
   )
@@ -246,6 +247,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     peersRef.current.delete(peerId)
     peerModeRef.current.delete(peerId)
     relayAttemptedRef.current.delete(peerId)
+    offerAttemptAtRef.current.delete(peerId)
     pendingIceRef.current.delete(peerId)
     setRemoteStreams((current) => {
       if (!current[peerId]) {
@@ -295,29 +297,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             to: peerId,
             transport: "relay",
           })
-          if (playerId < peerId) {
-            void (async () => {
-              try {
-                const relayPeer = createPeerConnection(peerId, "relay")
-                const offer = await relayPeer.createOffer()
-                await relayPeer.setLocalDescription(offer)
-                sendSignal({
-                  type: "offer",
-                  from: playerId,
-                  to: peerId,
-                  sdp: relayPeer.localDescription ?? offer,
-                  transport: "relay",
-                })
-              } catch (error) {
-                if (process.env.NODE_ENV === "development") {
-                  console.log("TURN_TIMEOUT_RETRY_OFFER_ERROR", {
-                    peerId,
-                    error,
-                  })
-                }
-              }
-            })()
-          }
           return
         }
 
@@ -466,27 +445,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             to: peerId,
             transport: "relay",
           })
-
-          if (playerId < peerId) {
-            void (async () => {
-              try {
-                const relayPeer = createPeerConnection(peerId, "relay")
-                const offer = await relayPeer.createOffer()
-                await relayPeer.setLocalDescription(offer)
-                sendSignal({
-                  type: "offer",
-                  from: playerId,
-                  to: peerId,
-                  sdp: relayPeer.localDescription ?? offer,
-                  transport: "relay",
-                })
-              } catch (error) {
-                if (process.env.NODE_ENV === "development") {
-                  console.log("TURN_RETRY_OFFER_ERROR", { peerId, error })
-                }
-              }
-            })()
-          }
           return
         }
 
@@ -528,6 +486,28 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       sendSignal,
       turnServer,
     ]
+  )
+
+  const sendOfferForPeer = React.useCallback(
+    async (peerId: string, mode?: PeerTransportMode) => {
+      if (!playerId) {
+        return
+      }
+
+      const selectedMode = mode ?? peerModeRef.current.get(peerId) ?? "p2p"
+      const peer = createPeerConnection(peerId, selectedMode)
+      const offer = await peer.createOffer()
+      await peer.setLocalDescription(offer)
+
+      sendSignal({
+        type: "offer",
+        from: playerId,
+        to: peerId,
+        sdp: peer.localDescription ?? offer,
+        transport: selectedMode,
+      })
+    },
+    [createPeerConnection, playerId, sendSignal]
   )
 
   const isVirtual = state.lobby.mode === "VIRTUAL"
@@ -638,16 +618,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             }
 
             if (playerId < message.from) {
-              const peer = createPeerConnection(message.from, transportMode)
-              const offer = await peer.createOffer()
-              await peer.setLocalDescription(offer)
-              sendSignal({
-                type: "offer",
-                from: playerId,
-                to: message.from,
-                sdp: peer.localDescription ?? offer,
-                transport: transportMode,
-              })
+              await sendOfferForPeer(message.from, transportMode)
             } else {
               // If this side is not the offerer, ping back so the lower-id peer
               // can initiate even when initial "ready" was missed on subscribe.
@@ -741,8 +712,80 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     isVirtual,
     localStream,
     playerId,
+    sendOfferForPeer,
     sendSignal,
     state.lobby.id,
+  ])
+
+  React.useEffect(() => {
+    if (!isVirtual || !playerId || !localStream) {
+      return
+    }
+
+    let cancelled = false
+
+    const ensurePeerLinks = async () => {
+      for (const player of state.players) {
+        const peerId = player.id
+        if (peerId === playerId) {
+          continue
+        }
+
+        const peer = peersRef.current.get(peerId)
+        if (
+          peer &&
+          (peer.connectionState === "connected" ||
+            peer.connectionState === "connecting")
+        ) {
+          continue
+        }
+
+        const mode = peerModeRef.current.get(peerId) ?? "p2p"
+
+        if (playerId < peerId) {
+          const now = Date.now()
+          const lastAttempt = offerAttemptAtRef.current.get(peerId) ?? 0
+          if (now - lastAttempt < 3000) {
+            continue
+          }
+          offerAttemptAtRef.current.set(peerId, now)
+
+          try {
+            await sendOfferForPeer(peerId, mode)
+          } catch (error) {
+            if (process.env.NODE_ENV === "development") {
+              console.log("ENSURE_PEER_OFFER_ERROR", { peerId, error })
+            }
+          }
+        } else {
+          sendSignal({
+            type: "ready",
+            from: playerId,
+            to: peerId,
+            transport: mode,
+          })
+        }
+      }
+    }
+
+    void ensurePeerLinks()
+    const intervalId = setInterval(() => {
+      if (!cancelled) {
+        void ensurePeerLinks()
+      }
+    }, 3000)
+
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+    }
+  }, [
+    isVirtual,
+    localStream,
+    playerId,
+    sendOfferForPeer,
+    sendSignal,
+    state.players,
   ])
 
   React.useEffect(() => {
