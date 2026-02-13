@@ -55,8 +55,26 @@ export async function POST(request: Request) {
     })
   } catch (err) {
     console.error("CREATE_LOBBY_ERROR", err)
+
+    const maybeError = err as {
+      message?: unknown
+      code?: unknown
+      name?: unknown
+      meta?: unknown
+    }
+
+    const message =
+      typeof maybeError.message === "string" && maybeError.message.trim()
+        ? maybeError.message
+        : "Request failed."
+
     return Response.json(
-      { error: String((err as Error | undefined)?.message ?? err) },
+      {
+        error: message,
+        code: String(maybeError.code ?? ""),
+        name: String(maybeError.name ?? ""),
+        meta: maybeError.meta ?? null,
+      },
       { status: 500 }
     )
   }

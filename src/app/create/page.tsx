@@ -13,8 +13,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { ErrorDebugPanel } from "@/components/ui/error-debug-panel"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { formatResponseError, formatThrownError } from "@/lib/client-error"
 import { getAccessTokenSafe } from "@/lib/safe-auth"
 
 export default function CreatePage() {
@@ -49,19 +51,14 @@ export default function CreatePage() {
       })
 
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}))
-        if (payload?.error) {
-          setError(payload.error)
-        } else {
-          setError("Unknown error")
-        }
+        setError(await formatResponseError(response, "CREATE_LOBBY_ERROR"))
         return
       }
 
       const payload = await response.json()
       router.push(`/lobby/${payload.code}?playerId=${payload.playerId}`)
-    } catch {
-      setError("Unknown error")
+    } catch (error) {
+      setError(formatThrownError(error, "CREATE_LOBBY_ERROR"))
     } finally {
       setIsSubmitting(false)
     }
@@ -161,11 +158,7 @@ export default function CreatePage() {
                 {isSubmitting ? "Creating..." : "Create Lobby"}
               </PrimaryButton>
 
-              {error ? (
-                <p className="text-sm font-semibold text-black" role="status">
-                  {error}
-                </p>
-              ) : null}
+              {error ? <ErrorDebugPanel message={error} /> : null}
             </form>
 
             <SecondaryButton asChild className="mt-4 w-full">

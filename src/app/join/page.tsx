@@ -13,8 +13,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { ErrorDebugPanel } from "@/components/ui/error-debug-panel"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { formatResponseError, formatThrownError } from "@/lib/client-error"
 import { getAccessTokenSafe } from "@/lib/safe-auth"
 
 const errorMessages: Record<string, string> = {
@@ -82,18 +84,52 @@ export default function JoinPage() {
       })
 
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}))
-        const message =
-          errorMessages[payload?.error] ??
-          "Could not join that lobby right now."
-        setError(message)
+        const debugError = await formatResponseError(response, "JOIN_LOBBY_ERROR")
+        const payloadText = debugError.toLowerCase()
+
+        if (payloadText.includes("detail=not_found")) {
+          setError(
+            `${errorMessages.not_found}\n${debugError}`
+          )
+          return
+        }
+
+        if (payloadText.includes("detail=expired")) {
+          setError(
+            `${errorMessages.expired}\n${debugError}`
+          )
+          return
+        }
+
+        if (payloadText.includes("detail=lobby_full")) {
+          setError(
+            `${errorMessages.lobby_full}\n${debugError}`
+          )
+          return
+        }
+
+        if (payloadText.includes("detail=not_open")) {
+          setError(
+            `${errorMessages.not_open}\n${debugError}`
+          )
+          return
+        }
+
+        if (payloadText.includes("detail=invalid_request")) {
+          setError(
+            `${errorMessages.invalid_request}\n${debugError}`
+          )
+          return
+        }
+
+        setError(debugError)
         return
       }
 
       const payload = await response.json()
       router.push(`/lobby/${payload.code}?playerId=${payload.playerId}`)
-    } catch {
-      setError("Could not join that lobby right now.")
+    } catch (error) {
+      setError(formatThrownError(error, "JOIN_LOBBY_ERROR"))
     } finally {
       setIsSubmitting(false)
     }
@@ -150,11 +186,7 @@ export default function JoinPage() {
                 />
               </label>
 
-              {error ? (
-                <p className="text-sm font-semibold text-black" role="status">
-                  {error}
-                </p>
-              ) : null}
+              {error ? <ErrorDebugPanel message={error} /> : null}
 
               <PrimaryButton type="submit" disabled={isSubmitting}>
                 {isSubmitting ? "Joining..." : "Join Lobby"}

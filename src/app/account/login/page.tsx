@@ -13,8 +13,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { ErrorDebugPanel } from "@/components/ui/error-debug-panel"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { formatThrownError } from "@/lib/client-error"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function AccountLoginPage() {
@@ -59,13 +61,13 @@ export default function AccountLoginPage() {
       })
 
       if (authError) {
-        setError(authError.message)
+        setError(`LOGIN_ERROR | detail=${authError.message}`)
         return
       }
 
       router.push(nextPath || "/account")
     } catch (error) {
-      setError(String((error as Error)?.message ?? error))
+      setError(formatThrownError(error, "LOGIN_ERROR"))
     } finally {
       setIsSubmitting(false)
     }
@@ -91,13 +93,13 @@ export default function AccountLoginPage() {
       )
 
       if (recoverError) {
-        setError(recoverError.message)
+        setError(`PASSWORD_RESET_ERROR | detail=${recoverError.message}`)
         return
       }
 
       setMessage("Password reset email sent. Check your inbox.")
     } catch (error) {
-      setError(String((error as Error)?.message ?? error))
+      setError(formatThrownError(error, "PASSWORD_RESET_ERROR"))
     } finally {
       setIsRecovering(false)
     }
@@ -154,9 +156,7 @@ export default function AccountLoginPage() {
                 {isRecovering ? "Sending..." : "Forgot password?"}
               </SecondaryButton>
 
-              {error ? (
-                <p className="text-sm font-semibold text-black">{error}</p>
-              ) : null}
+              {error ? <ErrorDebugPanel message={error} /> : null}
               {message ? <p className="text-sm text-black/70">{message}</p> : null}
             </form>
           </CardContent>
