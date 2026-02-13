@@ -70,11 +70,11 @@ function VideoTile({
 }: VideoTileProps) {
   const videoRef = React.useRef<HTMLVideoElement | null>(null)
   const [needsManualPlay, setNeedsManualPlay] = React.useState(false)
-  const trackingEnabled = isActive && Boolean(stream)
-  const anchor = useHeadAnchor(videoRef, trackingEnabled)
   const hasVideo = Boolean(
     stream?.getVideoTracks().some((track) => track.enabled)
   )
+  const trackingEnabled = isActive && hasVideo
+  const anchor = useHeadAnchor(videoRef, trackingEnabled)
 
   const tryPlay = React.useCallback(async () => {
     const video = videoRef.current
@@ -202,6 +202,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
+  const remoteMediaRef = React.useRef<Map<string, MediaStream>>(new Map())
   const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
   const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
   const relayCandidateSeenRef = React.useRef<Map<string, boolean>>(new Map())
@@ -374,6 +375,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     iceTypesRef.current.delete(peerId)
     offerAttemptAtRef.current.delete(peerId)
     pendingIceRef.current.delete(peerId)
+    remoteMediaRef.current.delete(peerId)
     setRemoteStreams((current) => {
       if (!current[peerId]) {
         return current
@@ -537,21 +539,60 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       }
 
       connection.ontrack = (event) => {
-        const [stream] = event.streams
-        if (!stream) {
-          return
+        const [incomingStream] = event.streams
+        let targetStream = incomingStream ?? remoteMediaRef.current.get(peerId)
+
+        if (!targetStream) {
+          targetStream = new MediaStream()
+          remoteMediaRef.current.set(peerId, targetStream)
         }
+
+        if (!incomingStream) {
+          const hasTrack = targetStream
+            .getTracks()
+            .some((track) => track.id === event.track.id)
+          if (!hasTrack) {
+            targetStream.addTrack(event.track)
+          }
+        } else {
+          remoteMediaRef.current.set(peerId, incomingStream)
+          targetStream = incomingStream
+        }
+
         setRemoteStreams((current) => {
-          if (current[peerId] === stream) {
+          if (current[peerId] === targetStream) {
             return current
           }
-          return { ...current, [peerId]: stream }
+          return { ...current, [peerId]: targetStream }
         })
 
         const timeoutId = connectTimeoutsRef.current.get(peerId)
         if (timeoutId) {
           clearTimeout(timeoutId)
           connectTimeoutsRef.current.delete(peerId)
+        }
+
+        event.track.onended = () => {
+          const stream = remoteMediaRef.current.get(peerId)
+          if (!stream) {
+            return
+          }
+
+          stream.removeTrack(event.track)
+          if (stream.getTracks().length > 0) {
+            setRemoteStreams((current) => ({ ...current, [peerId]: stream }))
+            return
+          }
+
+          remoteMediaRef.current.delete(peerId)
+          setRemoteStreams((current) => {
+            if (!current[peerId]) {
+              return current
+            }
+            const next = { ...current }
+            delete next[peerId]
+            return next
+          })
         }
       }
 
