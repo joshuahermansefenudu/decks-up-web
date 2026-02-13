@@ -158,6 +158,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [mediaError, setMediaError] = React.useState("")
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
   const [signalStatus, setSignalStatus] = React.useState("idle")
+  const [iceStatus, setIceStatus] = React.useState("")
   const [isMicMuted, setIsMicMuted] = React.useState(false)
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
@@ -165,6 +166,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
   const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
   const relayCandidateSeenRef = React.useRef<Map<string, boolean>>(new Map())
+  const iceTypesRef = React.useRef<Map<string, Set<string>>>(new Map())
   const offerAttemptAtRef = React.useRef<Map<string, number>>(new Map())
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
@@ -281,6 +283,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     peerModeRef.current.delete(peerId)
     relayAttemptedRef.current.delete(peerId)
     relayCandidateSeenRef.current.delete(peerId)
+    iceTypesRef.current.delete(peerId)
     offerAttemptAtRef.current.delete(peerId)
     pendingIceRef.current.delete(peerId)
     setRemoteStreams((current) => {
@@ -344,6 +347,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           setWebrtcStatus(
             "TURN relay could not be established. Check TURN credentials and ports."
           )
+          cleanupPeer(peerId)
+          return
         }
 
         cleanupPeer(peerId)
@@ -421,6 +426,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           sdpMLineIndex: event.candidate.sdpMLineIndex ?? undefined,
           usernameFragment: event.candidate.usernameFragment ?? undefined,
         }
+        const typeMatch = candidate.candidate?.match(/\btyp\s+([a-zA-Z]+)/)
+        const candidateType = typeMatch?.[1]?.toLowerCase()
+        if (candidateType) {
+          const typeSet = iceTypesRef.current.get(peerId) ?? new Set<string>()
+          typeSet.add(candidateType)
+          iceTypesRef.current.set(peerId, typeSet)
+          setIceStatus(`ICE candidates: ${Array.from(typeSet).join(", ")}`)
+        }
         if (candidate.candidate?.includes(" typ relay ")) {
           relayCandidateSeenRef.current.set(peerId, true)
         }
@@ -481,6 +494,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         const currentMode = peerModeRef.current.get(peerId) ?? mode
         if (currentMode === "p2p" && hasTurnServer && playerId) {
+          setWebrtcStatus("P2P failed. Switching to TURN relay...")
           cleanupPeer(peerId)
           peerModeRef.current.set(peerId, "relay")
 
@@ -509,6 +523,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           connection.iceConnectionState === "connected" ||
           connection.iceConnectionState === "completed"
         ) {
+          const typeSet = iceTypesRef.current.get(peerId)
+          if (typeSet?.size) {
+            setIceStatus(`Connected via ICE: ${Array.from(typeSet).join(", ")}`)
+          }
           const timeoutId = connectTimeoutsRef.current.get(peerId)
           if (timeoutId) {
             clearTimeout(timeoutId)
@@ -1170,6 +1188,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         {webrtcStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {webrtcStatus}
+          </div>
+        ) : null}
+        {iceStatus ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+            {iceStatus}
           </div>
         ) : null}
 
