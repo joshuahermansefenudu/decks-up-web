@@ -49,6 +49,8 @@ type GameScreenProps = {
   playerId?: string
 }
 
+type PeerTransportMode = "p2p" | "relay"
+
 type VideoTileProps = {
   stream: MediaStream | null
   name: string
@@ -158,13 +160,21 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
+  const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
+  const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
+    new Map()
+  )
   const channelRef = React.useRef<ReturnType<
     typeof supabaseBrowser.channel
   > | null>(null)
-  const iceServers = React.useMemo(() => {
-    const servers: RTCIceServer[] = [
+  const p2pIceServers = React.useMemo<RTCIceServer[]>(
+    () => [
       { urls: "stun:stun.l.google.com:19302" },
-    ]
+      { urls: "stun:stun1.l.google.com:19302" },
+    ],
+    []
+  )
+  const turnServer = React.useMemo<RTCIceServer | null>(() => {
     const turnUrl = process.env.NEXT_PUBLIC_TURN_URL ?? ""
     const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME ?? ""
     const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? ""
@@ -172,15 +182,17 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       .split(",")
       .map((url) => url.trim())
       .filter(Boolean)
-    if (turnUrls.length && turnUsername && turnCredential) {
-      servers.push({
-        urls: turnUrls,
-        username: turnUsername,
-        credential: turnCredential,
-      })
+    if (!turnUrls.length || !turnUsername || !turnCredential) {
+      return null
     }
-    return servers
+
+    return {
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnCredential,
+    }
   }, [])
+  const hasTurnServer = Boolean(turnServer)
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -199,6 +211,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     to?: string
     sdp?: RTCSessionDescriptionInit
     candidate?: RTCIceCandidateInit
+    transport?: PeerTransportMode
   }
 
   const sendSignal = React.useCallback((payload: SignalPayload) => {
@@ -214,9 +227,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     if (peer) {
       peer.ontrack = null
       peer.onicecandidate = null
+      peer.onconnectionstatechange = null
       peer.close()
     }
     peersRef.current.delete(peerId)
+    peerModeRef.current.delete(peerId)
+    pendingIceRef.current.delete(peerId)
     setRemoteStreams((current) => {
       if (!current[peerId]) {
         return current
@@ -227,15 +243,50 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     })
   }, [])
 
+  const flushPendingIce = React.useCallback(
+    async (peerId: string, peer: RTCPeerConnection) => {
+      const queued = pendingIceRef.current.get(peerId) ?? []
+      if (!queued.length) {
+        return
+      }
+
+      pendingIceRef.current.delete(peerId)
+
+      for (const candidate of queued) {
+        try {
+          await peer.addIceCandidate(candidate)
+        } catch (error) {
+          if (process.env.NODE_ENV === "development") {
+            console.log("ICE_FLUSH_ERROR", { peerId, error })
+          }
+        }
+      }
+    },
+    []
+  )
+
   const createPeerConnection = React.useCallback(
-    (peerId: string) => {
+    (peerId: string, requestedMode?: PeerTransportMode) => {
       const existing = peersRef.current.get(peerId)
       if (existing) {
         return existing
       }
 
+      const mode = requestedMode ?? peerModeRef.current.get(peerId) ?? "p2p"
+      peerModeRef.current.set(peerId, mode)
+
+      const rtcConfig: RTCConfiguration =
+        mode === "relay" && turnServer
+          ? {
+              iceServers: [turnServer],
+              iceTransportPolicy: "relay",
+            }
+          : {
+              iceServers: p2pIceServers,
+            }
+
       const connection = new RTCPeerConnection({
-        iceServers,
+        ...rtcConfig,
       })
 
       if (localStream) {
@@ -273,19 +324,73 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       }
 
       connection.onconnectionstatechange = () => {
-        if (
-          connection.connectionState === "failed" ||
-          connection.connectionState === "closed" ||
-          connection.connectionState === "disconnected"
-        ) {
-          cleanupPeer(peerId)
+        if (process.env.NODE_ENV === "development") {
+          console.log("PEER_CONNECTION_STATE", {
+            peerId,
+            mode: peerModeRef.current.get(peerId) ?? mode,
+            state: connection.connectionState,
+          })
         }
+
+        if (connection.connectionState === "closed") {
+          cleanupPeer(peerId)
+          return
+        }
+
+        if (connection.connectionState !== "failed") {
+          return
+        }
+
+        const currentMode = peerModeRef.current.get(peerId) ?? mode
+        if (currentMode === "p2p" && hasTurnServer && playerId) {
+          cleanupPeer(peerId)
+          peerModeRef.current.set(peerId, "relay")
+
+          sendSignal({
+            type: "ready",
+            from: playerId,
+            to: peerId,
+            transport: "relay",
+          })
+
+          if (playerId < peerId) {
+            void (async () => {
+              try {
+                const relayPeer = createPeerConnection(peerId, "relay")
+                const offer = await relayPeer.createOffer()
+                await relayPeer.setLocalDescription(offer)
+                sendSignal({
+                  type: "offer",
+                  from: playerId,
+                  to: peerId,
+                  sdp: relayPeer.localDescription ?? offer,
+                  transport: "relay",
+                })
+              } catch (error) {
+                if (process.env.NODE_ENV === "development") {
+                  console.log("TURN_RETRY_OFFER_ERROR", { peerId, error })
+                }
+              }
+            })()
+          }
+          return
+        }
+
+        cleanupPeer(peerId)
       }
 
       peersRef.current.set(peerId, connection)
       return connection
     },
-    [cleanupPeer, iceServers, localStream, playerId, sendSignal]
+    [
+      cleanupPeer,
+      hasTurnServer,
+      localStream,
+      p2pIceServers,
+      playerId,
+      sendSignal,
+      turnServer,
+    ]
   )
 
   const isVirtual = state.lobby.mode === "VIRTUAL"
@@ -371,52 +476,76 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         config: { broadcast: { self: false } },
       })
       .on("broadcast", { event: "signal" }, async ({ payload }) => {
-        const message = payload as SignalPayload
-        if (!message?.from || message.from === playerId) {
-          return
-        }
-        if (message.to && message.to !== playerId) {
-          return
-        }
+        try {
+          const message = payload as SignalPayload
+          if (!message?.from || message.from === playerId) {
+            return
+          }
+          if (message.to && message.to !== playerId) {
+            return
+          }
 
-        if (message.type === "ready") {
-          if (playerId < message.from) {
-            const peer = createPeerConnection(message.from)
-            const offer = await peer.createOffer()
-            await peer.setLocalDescription(offer)
+          const transportMode: PeerTransportMode =
+            message.transport === "relay" ? "relay" : "p2p"
+
+          if (message.type === "ready") {
+            peerModeRef.current.set(message.from, transportMode)
+
+            if (playerId < message.from) {
+              const peer = createPeerConnection(message.from, transportMode)
+              const offer = await peer.createOffer()
+              await peer.setLocalDescription(offer)
+              sendSignal({
+                type: "offer",
+                from: playerId,
+                to: message.from,
+                sdp: peer.localDescription ?? offer,
+                transport: transportMode,
+              })
+            }
+            return
+          }
+
+          if (message.type === "offer" && message.sdp) {
+            peerModeRef.current.set(message.from, transportMode)
+            const peer = createPeerConnection(message.from, transportMode)
+            await peer.setRemoteDescription(message.sdp)
+            await flushPendingIce(message.from, peer)
+            const answer = await peer.createAnswer()
+            await peer.setLocalDescription(answer)
             sendSignal({
-              type: "offer",
+              type: "answer",
               from: playerId,
               to: message.from,
-              sdp: peer.localDescription ?? offer,
+              sdp: peer.localDescription ?? answer,
+              transport: transportMode,
             })
+            return
           }
-          return
-        }
 
-        if (message.type === "offer" && message.sdp) {
-          const peer = createPeerConnection(message.from)
-          await peer.setRemoteDescription(message.sdp)
-          const answer = await peer.createAnswer()
-          await peer.setLocalDescription(answer)
-          sendSignal({
-            type: "answer",
-            from: playerId,
-            to: message.from,
-            sdp: peer.localDescription ?? answer,
-          })
-          return
-        }
+          if (message.type === "answer" && message.sdp) {
+            const peer = createPeerConnection(message.from)
+            await peer.setRemoteDescription(message.sdp)
+            await flushPendingIce(message.from, peer)
+            return
+          }
 
-        if (message.type === "answer" && message.sdp) {
-          const peer = createPeerConnection(message.from)
-          await peer.setRemoteDescription(message.sdp)
-          return
-        }
+          if (message.type === "ice" && message.candidate) {
+            const peer = createPeerConnection(message.from)
 
-        if (message.type === "ice" && message.candidate) {
-          const peer = createPeerConnection(message.from)
-          await peer.addIceCandidate(message.candidate)
+            if (!peer.remoteDescription) {
+              const queued = pendingIceRef.current.get(message.from) ?? []
+              queued.push(message.candidate)
+              pendingIceRef.current.set(message.from, queued)
+              return
+            }
+
+            await peer.addIceCandidate(message.candidate)
+          }
+        } catch (error) {
+          if (process.env.NODE_ENV === "development") {
+            console.log("SIGNAL_HANDLE_ERROR", error)
+          }
         }
       })
 
@@ -427,7 +556,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         channel.send({
           type: "broadcast",
           event: "signal",
-          payload: { type: "ready", from: playerId },
+          payload: { type: "ready", from: playerId, transport: "p2p" },
         })
       }
     })
@@ -438,6 +567,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
     }
   }, [
+    flushPendingIce,
     cleanupPeer,
     createPeerConnection,
     isVirtual,
