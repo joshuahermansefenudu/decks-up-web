@@ -159,6 +159,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
   const [signalStatus, setSignalStatus] = React.useState("idle")
   const [iceStatus, setIceStatus] = React.useState("")
+  const [signalDebug, setSignalDebug] = React.useState("")
   const [isMicMuted, setIsMicMuted] = React.useState(false)
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
@@ -167,6 +168,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
   const relayCandidateSeenRef = React.useRef<Map<string, boolean>>(new Map())
   const iceTypesRef = React.useRef<Map<string, Set<string>>>(new Map())
+  const signalCountsRef = React.useRef({
+    readySent: 0,
+    readyReceived: 0,
+    offerSent: 0,
+    offerReceived: 0,
+    answerSent: 0,
+    answerReceived: 0,
+    iceSent: 0,
+    iceReceived: 0,
+  })
   const offerAttemptAtRef = React.useRef<Map<string, number>>(new Map())
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
@@ -217,6 +228,32 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     ]
   }, [])
   const hasTurnServer = turnServers.length > 0
+  const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === "true"
+
+  const updateSignalDebug = React.useCallback(() => {
+    const c = signalCountsRef.current
+    setSignalDebug(
+      `S:ready ${c.readySent}/${c.readyReceived} | offer ${c.offerSent}/${c.offerReceived} | answer ${c.answerSent}/${c.answerReceived} | ice ${c.iceSent}/${c.iceReceived}`
+    )
+  }, [])
+
+  const bumpSignalCount = React.useCallback(
+    (
+      key:
+        | "readySent"
+        | "readyReceived"
+        | "offerSent"
+        | "offerReceived"
+        | "answerSent"
+        | "answerReceived"
+        | "iceSent"
+        | "iceReceived"
+    ) => {
+      signalCountsRef.current[key] += 1
+      updateSignalDebug()
+    },
+    [updateSignalDebug]
+  )
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -244,6 +281,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       return
     }
 
+    if (payload.type === "ready") {
+      bumpSignalCount("readySent")
+    } else if (payload.type === "offer") {
+      bumpSignalCount("offerSent")
+    } else if (payload.type === "answer") {
+      bumpSignalCount("answerSent")
+    } else if (payload.type === "ice") {
+      bumpSignalCount("iceSent")
+    }
+
     void channel
       .send({
         type: "broadcast",
@@ -261,7 +308,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         }
         setWebrtcStatus("Signal send failed.")
       })
-  }, [])
+  }, [bumpSignalCount])
 
   const cleanupPeer = React.useCallback((peerId: string) => {
     const peer = peersRef.current.get(peerId)
@@ -391,7 +438,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         return existing
       }
 
-      const mode = requestedMode ?? peerModeRef.current.get(peerId) ?? "p2p"
+      const mode =
+        requestedMode ??
+        peerModeRef.current.get(peerId) ??
+        (forceTurn ? "relay" : "p2p")
       peerModeRef.current.set(peerId, mode)
 
       const rtcConfig: RTCConfiguration =
@@ -548,6 +598,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       scheduleConnectTimeout,
       sendSignal,
       turnServers,
+      forceTurn,
     ]
   )
 
@@ -665,6 +716,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             return
           }
 
+          if (message.type === "ready") {
+            bumpSignalCount("readyReceived")
+          } else if (message.type === "offer") {
+            bumpSignalCount("offerReceived")
+          } else if (message.type === "answer") {
+            bumpSignalCount("answerReceived")
+          } else if (message.type === "ice") {
+            bumpSignalCount("iceReceived")
+          }
+
           const transportMode: PeerTransportMode =
             message.transport === "relay" ? "relay" : "p2p"
 
@@ -749,14 +810,22 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         channel.send({
           type: "broadcast",
           event: "signal",
-          payload: { type: "ready", from: playerId, transport: "p2p" },
+          payload: {
+            type: "ready",
+            from: playerId,
+            transport: forceTurn ? "relay" : "p2p",
+          },
         })
 
         readyHeartbeat = setInterval(() => {
           channel.send({
             type: "broadcast",
             event: "signal",
-            payload: { type: "ready", from: playerId, transport: "p2p" },
+            payload: {
+              type: "ready",
+              from: playerId,
+              transport: forceTurn ? "relay" : "p2p",
+            },
           })
         }, 7000)
         return
@@ -777,6 +846,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     }
   }, [
     flushPendingIce,
+    bumpSignalCount,
     cleanupPeer,
     createPeerConnection,
     isVirtual,
@@ -810,7 +880,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           continue
         }
 
-        const mode = peerModeRef.current.get(peerId) ?? "p2p"
+        const mode =
+          peerModeRef.current.get(peerId) ?? (forceTurn ? "relay" : "p2p")
 
         if (playerId < peerId) {
           const now = Date.now()
@@ -850,6 +921,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       clearInterval(intervalId)
     }
   }, [
+    forceTurn,
     isVirtual,
     localStream,
     playerId,
@@ -1188,6 +1260,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         {webrtcStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {webrtcStatus}
+          </div>
+        ) : null}
+        {signalDebug ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+            {signalDebug}
           </div>
         ) : null}
         {iceStatus ? (
