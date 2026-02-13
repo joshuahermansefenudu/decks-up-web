@@ -164,6 +164,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
   const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
   const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
+  const relayCandidateSeenRef = React.useRef<Map<string, boolean>>(new Map())
   const offerAttemptAtRef = React.useRef<Map<string, number>>(new Map())
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
@@ -181,25 +182,39 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     ],
     []
   )
-  const turnServer = React.useMemo<RTCIceServer | null>(() => {
+  const turnServers = React.useMemo<RTCIceServer[]>(() => {
     const turnUrl = process.env.NEXT_PUBLIC_TURN_URL ?? ""
     const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME ?? ""
     const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? ""
-    const turnUrls = turnUrl
+    const baseUrls = turnUrl
       .split(",")
       .map((url) => url.trim())
       .filter(Boolean)
-    if (!turnUrls.length || !turnUsername || !turnCredential) {
-      return null
+
+    if (!baseUrls.length || !turnUsername || !turnCredential) {
+      return []
     }
 
-    return {
-      urls: turnUrls,
-      username: turnUsername,
-      credential: turnCredential,
+    const urls = new Set(baseUrls)
+    const first = baseUrls[0] ?? ""
+    const match = first.match(/^(?:turns?:)?([^:/?]+)/i)
+    const host = match?.[1]
+
+    if (host) {
+      urls.add(`turn:${host}:80?transport=tcp`)
+      urls.add(`turn:${host}:443?transport=tcp`)
+      urls.add(`turns:${host}:443?transport=tcp`)
     }
+
+    return [
+      {
+        urls: Array.from(urls),
+        username: turnUsername,
+        credential: turnCredential,
+      },
+    ]
   }, [])
-  const hasTurnServer = Boolean(turnServer)
+  const hasTurnServer = turnServers.length > 0
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -265,6 +280,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     peersRef.current.delete(peerId)
     peerModeRef.current.delete(peerId)
     relayAttemptedRef.current.delete(peerId)
+    relayCandidateSeenRef.current.delete(peerId)
     offerAttemptAtRef.current.delete(peerId)
     pendingIceRef.current.delete(peerId)
     setRemoteStreams((current) => {
@@ -324,6 +340,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           )
         }
 
+        if (mode === "relay" && !relayCandidateSeenRef.current.get(peerId)) {
+          setWebrtcStatus(
+            "TURN relay could not be established. Check TURN credentials and ports."
+          )
+        }
+
         cleanupPeer(peerId)
         setWebrtcStatus(
           "Video connection failed for a player. Ask both players to refresh."
@@ -368,13 +390,15 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       peerModeRef.current.set(peerId, mode)
 
       const rtcConfig: RTCConfiguration =
-        mode === "relay" && turnServer
+        mode === "relay" && hasTurnServer
           ? {
-              iceServers: [turnServer],
+              iceServers: turnServers,
               iceTransportPolicy: "relay",
             }
           : {
-              iceServers: p2pIceServers,
+              iceServers: hasTurnServer
+                ? [...p2pIceServers, ...turnServers]
+                : p2pIceServers,
             }
 
       const connection = new RTCPeerConnection({
@@ -396,6 +420,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           sdpMid: event.candidate.sdpMid ?? undefined,
           sdpMLineIndex: event.candidate.sdpMLineIndex ?? undefined,
           usernameFragment: event.candidate.usernameFragment ?? undefined,
+        }
+        if (candidate.candidate?.includes(" typ relay ")) {
+          relayCandidateSeenRef.current.set(peerId, true)
         }
         sendSignal({
           type: "ice",
@@ -502,7 +529,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       playerId,
       scheduleConnectTimeout,
       sendSignal,
-      turnServer,
+      turnServers,
     ]
   )
 
