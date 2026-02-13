@@ -628,6 +628,15 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           if (message.type === "ready") {
             peerModeRef.current.set(message.from, transportMode)
 
+            const existingPeer = peersRef.current.get(message.from)
+            if (
+              existingPeer &&
+              (existingPeer.connectionState === "connected" ||
+                existingPeer.connectionState === "connecting")
+            ) {
+              return
+            }
+
             if (playerId < message.from) {
               const peer = createPeerConnection(message.from, transportMode)
               const offer = await peer.createOffer()
@@ -637,6 +646,15 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                 from: playerId,
                 to: message.from,
                 sdp: peer.localDescription ?? offer,
+                transport: transportMode,
+              })
+            } else {
+              // If this side is not the offerer, ping back so the lower-id peer
+              // can initiate even when initial "ready" was missed on subscribe.
+              sendSignal({
+                type: "ready",
+                from: playerId,
+                to: message.from,
                 transport: transportMode,
               })
             }
@@ -688,6 +706,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
     channelRef.current = channel
 
+    let readyHeartbeat: ReturnType<typeof setInterval> | null = null
+
     channel.subscribe((status) => {
       if (status === "SUBSCRIBED") {
         channel.send({
@@ -695,10 +715,21 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           event: "signal",
           payload: { type: "ready", from: playerId, transport: "p2p" },
         })
+
+        readyHeartbeat = setInterval(() => {
+          channel.send({
+            type: "broadcast",
+            event: "signal",
+            payload: { type: "ready", from: playerId, transport: "p2p" },
+          })
+        }, 7000)
       }
     })
 
     return () => {
+      if (readyHeartbeat) {
+        clearInterval(readyHeartbeat)
+      }
       channelRef.current = null
       supabaseBrowser.removeChannel(channel)
       peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
