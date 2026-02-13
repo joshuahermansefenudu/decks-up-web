@@ -222,6 +222,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     iceReceived: 0,
   })
   const offerAttemptAtRef = React.useRef<Map<string, number>>(new Map())
+  const readySentAtRef = React.useRef<Map<string, number>>(new Map())
+  const lastSignalDebugUpdateRef = React.useRef(0)
+  const signalStatusRef = React.useRef(signalStatus)
+  const subscribedReadyAtRef = React.useRef(0)
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
   )
@@ -272,12 +276,24 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [])
   const hasTurnServer = turnServers.length > 0
   const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === "true"
+  const showNetworkDebug =
+    process.env.NODE_ENV === "development" ||
+    process.env.NEXT_PUBLIC_SHOW_NETWORK_DEBUG === "true"
 
-  const updateSignalDebug = React.useCallback(() => {
+  React.useEffect(() => {
+    signalStatusRef.current = signalStatus
+  }, [signalStatus])
+
+  const updateSignalDebug = React.useCallback((force?: boolean) => {
+    const now = Date.now()
+    if (!force && now - lastSignalDebugUpdateRef.current < 500) {
+      return
+    }
+    lastSignalDebugUpdateRef.current = now
     const c = signalCountsRef.current
-    setSignalDebug(
+    const next =
       `S:ready ${c.readySent}/${c.readyReceived} | offer ${c.offerSent}/${c.offerReceived} | answer ${c.answerSent}/${c.answerReceived} | ice ${c.iceSent}/${c.iceReceived}`
-    )
+    setSignalDebug((prev) => (prev === next ? prev : next))
   }, [])
 
   const bumpSignalCount = React.useCallback(
@@ -314,18 +330,19 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       const errorCode =
         `VIDEO_FEED_ERROR_CODE=${code}` +
         ` | peer=${peerId ?? "na"}` +
-        ` | signal=${signalStatus}` +
+        ` | signal=${signalStatusRef.current}` +
         ` | mode=${mode}` +
         ` | ice=${ice}` +
         ` | counts=ready ${c.readySent}/${c.readyReceived},offer ${c.offerSent}/${c.offerReceived},answer ${c.answerSent}/${c.answerReceived},ice ${c.iceSent}/${c.iceReceived}` +
         (detail ? ` | detail=${detail}` : "")
 
       setVideoErrorCode(errorCode)
+      updateSignalDebug(true)
       if (process.env.NODE_ENV === "development") {
         console.log(errorCode)
       }
     },
-    [signalStatus]
+    [updateSignalDebug]
   )
 
   const fetchState = React.useCallback(async () => {
@@ -417,6 +434,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     relayCandidateSeenRef.current.delete(peerId)
     iceTypesRef.current.delete(peerId)
     offerAttemptAtRef.current.delete(peerId)
+    readySentAtRef.current.delete(peerId)
     pendingIceRef.current.delete(peerId)
     remoteMediaRef.current.delete(peerId)
     setRemoteStreams((current) => {
@@ -889,8 +907,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           const transportMode: PeerTransportMode =
             message.transport === "relay" ? "relay" : "p2p"
 
-          if (message.type === "ready") {
-            peerModeRef.current.set(message.from, transportMode)
+	          if (message.type === "ready") {
+	            peerModeRef.current.set(message.from, transportMode)
 
             const existingPeer = peersRef.current.get(message.from)
             if (
@@ -901,11 +919,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               return
             }
 
-            if (playerId < message.from) {
-              await sendOfferForPeer(message.from, transportMode)
-            }
-            return
-          }
+	            if (playerId < message.from) {
+                const now = Date.now()
+                const lastAttempt = offerAttemptAtRef.current.get(message.from) ?? 0
+                if (now - lastAttempt >= 3000) {
+                  offerAttemptAtRef.current.set(message.from, now)
+                  await sendOfferForPeer(message.from, transportMode)
+                }
+	            }
+	            return
+	          }
 
           if (message.type === "offer" && message.sdp) {
             peerModeRef.current.set(message.from, transportMode)
@@ -952,22 +975,26 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
     channelRef.current = channel
 
-    channel.subscribe((status) => {
-      setSignalStatus(status)
-      if (status === "SUBSCRIBED") {
-        setWebrtcStatus("")
-        setVideoErrorCode("")
-        channel.send({
-          type: "broadcast",
-          event: "signal",
-          payload: {
-            type: "ready",
-            from: playerId,
-            transport: forceTurn ? "relay" : "p2p",
-          },
-        })
-        return
-      }
+	    channel.subscribe((status) => {
+	      setSignalStatus((prev) => (prev === status ? prev : status))
+	      if (status === "SUBSCRIBED") {
+	        setWebrtcStatus("")
+	        setVideoErrorCode("")
+          const now = Date.now()
+          if (now - subscribedReadyAtRef.current >= 3000) {
+            subscribedReadyAtRef.current = now
+            channel.send({
+              type: "broadcast",
+              event: "signal",
+              payload: {
+                type: "ready",
+                from: playerId,
+                transport: forceTurn ? "relay" : "p2p",
+              },
+            })
+          }
+	        return
+	      }
 
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
         setWebrtcFailure(
@@ -1038,10 +1065,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               console.log("ENSURE_PEER_OFFER_ERROR", { peerId, error })
             }
           }
-        } else {
-          sendSignal({
-            type: "ready",
-            from: playerId,
+	        } else {
+            const now = Date.now()
+            const lastReady = readySentAtRef.current.get(peerId) ?? 0
+            if (now - lastReady < 8000) {
+              continue
+            }
+            readySentAtRef.current.set(peerId, now)
+	          sendSignal({
+	            type: "ready",
+	            from: playerId,
             to: peerId,
             transport: mode,
           })
@@ -1067,9 +1100,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     playerId,
     sendOfferForPeer,
     sendSignal,
-    setWebrtcFailure,
-    state.players,
-  ])
+	    state.players,
+	  ])
 
   React.useEffect(() => {
     if (!isVirtual || state.players.length <= 1) {
@@ -1426,23 +1458,27 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             {mediaError}
           </div>
         ) : null}
-        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-          Signal: {signalStatus}
-        </div>
+        {showNetworkDebug ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+            Signal: {signalStatus}
+          </div>
+        ) : null}
         {webrtcStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {webrtcStatus}
           </div>
         ) : null}
-        {signalDebug ? (
+        {showNetworkDebug && signalDebug ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {signalDebug}
           </div>
         ) : null}
-        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-          Remote tracks: {remoteTrackDebug}
-        </div>
-        {iceStatus ? (
+        {showNetworkDebug ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+            Remote tracks: {remoteTrackDebug}
+          </div>
+        ) : null}
+        {showNetworkDebug && iceStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {iceStatus}
           </div>
