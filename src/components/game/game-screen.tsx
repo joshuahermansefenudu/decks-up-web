@@ -195,6 +195,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   >({})
   const [mediaError, setMediaError] = React.useState("")
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
+  const [videoErrorCode, setVideoErrorCode] = React.useState("")
   const [signalStatus, setSignalStatus] = React.useState("idle")
   const [iceStatus, setIceStatus] = React.useState("")
   const [signalDebug, setSignalDebug] = React.useState("")
@@ -294,6 +295,36 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     [updateSignalDebug]
   )
 
+  const setWebrtcFailure = React.useCallback(
+    (
+      statusMessage: string,
+      code: string,
+      peerId?: string,
+      detail?: string
+    ) => {
+      setWebrtcStatus(statusMessage)
+      const c = signalCountsRef.current
+      const mode = peerId ? peerModeRef.current.get(peerId) ?? "unknown" : "na"
+      const ice = peerId
+        ? Array.from(iceTypesRef.current.get(peerId) ?? []).join(",") || "none"
+        : "na"
+      const errorCode =
+        `VIDEO_FEED_ERROR_CODE=${code}` +
+        ` | peer=${peerId ?? "na"}` +
+        ` | signal=${signalStatus}` +
+        ` | mode=${mode}` +
+        ` | ice=${ice}` +
+        ` | counts=ready ${c.readySent}/${c.readyReceived},offer ${c.offerSent}/${c.offerReceived},answer ${c.answerSent}/${c.answerReceived},ice ${c.iceSent}/${c.iceReceived}` +
+        (detail ? ` | detail=${detail}` : "")
+
+      setVideoErrorCode(errorCode)
+      if (process.env.NODE_ENV === "development") {
+        console.log(errorCode)
+      }
+    },
+    [signalStatus]
+  )
+
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
       `/api/lobbies/${initialState.lobby.code}?playerId=${playerId ?? ""}`
@@ -341,16 +372,25 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           console.log("SIGNAL_SEND_RESULT", result)
         }
         if (result !== "ok") {
-          setWebrtcStatus(`Signal send failed (${result}).`)
+          setWebrtcFailure(
+            `Signal send failed (${result}).`,
+            "VFD_SIGNAL_SEND_FAILED",
+            payload.to,
+            `result=${result}`
+          )
         }
       })
       .catch((error) => {
         if (process.env.NODE_ENV === "development") {
           console.log("SIGNAL_SEND_ERROR", error)
         }
-        setWebrtcStatus("Signal send failed.")
+        setWebrtcFailure(
+          "Signal send failed.",
+          "VFD_SIGNAL_SEND_THROW",
+          payload.to
+        )
       })
-  }, [bumpSignalCount])
+  }, [bumpSignalCount, setWebrtcFailure])
 
   const cleanupPeer = React.useCallback((peerId: string) => {
     const peer = peersRef.current.get(peerId)
@@ -414,7 +454,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           !relayAttemptedRef.current.get(peerId) &&
           playerId
         ) {
-          setWebrtcStatus("P2P unstable. Retrying video through TURN relay...")
+          setWebrtcFailure(
+            "P2P unstable. Retrying video through TURN relay...",
+            "VFD_P2P_TIMEOUT_RETRY_RELAY",
+            peerId
+          )
           relayAttemptedRef.current.set(peerId, true)
           cleanupPeer(peerId)
           peerModeRef.current.set(peerId, "relay")
@@ -428,28 +472,34 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         }
 
         if (mode === "p2p" && !hasTurnServer) {
-          setWebrtcStatus(
-            "P2P failed and TURN fallback is not configured in this deployment."
+          setWebrtcFailure(
+            "P2P failed and TURN fallback is not configured in this deployment.",
+            "VFD_TURN_NOT_CONFIGURED",
+            peerId
           )
         }
 
         if (mode === "relay" && !relayCandidateSeenRef.current.get(peerId)) {
-          setWebrtcStatus(
-            "TURN relay could not be established. Check TURN credentials and ports."
+          setWebrtcFailure(
+            "TURN relay could not be established. Check TURN credentials and ports.",
+            "VFD_RELAY_NO_CANDIDATE",
+            peerId
           )
           cleanupPeer(peerId)
           return
         }
 
         cleanupPeer(peerId)
-        setWebrtcStatus(
-          "Video connection failed for a player. Ask both players to refresh."
+        setWebrtcFailure(
+          "Video connection failed for a player. Ask both players to refresh.",
+          "VFD_PEER_CONNECT_FAILED",
+          peerId
         )
       }, timeoutMs)
 
       connectTimeoutsRef.current.set(peerId, timeoutId)
     },
-    [cleanupPeer, hasTurnServer, playerId, sendSignal]
+    [cleanupPeer, hasTurnServer, playerId, sendSignal, setWebrtcFailure]
   )
 
   const flushPendingIce = React.useCallback(
@@ -612,6 +662,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         if (connection.connectionState === "connected") {
           setWebrtcStatus("")
+          setVideoErrorCode("")
           const timeoutId = connectTimeoutsRef.current.get(peerId)
           if (timeoutId) {
             clearTimeout(timeoutId)
@@ -626,7 +677,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         const currentMode = peerModeRef.current.get(peerId) ?? mode
         if (currentMode === "p2p" && hasTurnServer && playerId) {
-          setWebrtcStatus("P2P failed. Switching to TURN relay...")
+          setWebrtcFailure(
+            "P2P failed. Switching to TURN relay...",
+            "VFD_P2P_FAILED_SWITCH_RELAY",
+            peerId
+          )
           cleanupPeer(peerId)
           peerModeRef.current.set(peerId, "relay")
 
@@ -639,7 +694,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           return
         }
 
-        cleanupPeer(peerId)
+      setWebrtcFailure(
+        "Video peer entered failed state.",
+        "VFD_CONNECTION_STATE_FAILED",
+        peerId
+      )
+      cleanupPeer(peerId)
       }
 
       connection.oniceconnectionstatechange = () => {
@@ -681,6 +741,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       sendSignal,
       turnServers,
       forceTurn,
+      setWebrtcFailure,
     ]
   )
 
@@ -878,6 +939,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       setSignalStatus(status)
       if (status === "SUBSCRIBED") {
         setWebrtcStatus("")
+        setVideoErrorCode("")
         channel.send({
           type: "broadcast",
           event: "signal",
@@ -891,7 +953,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       }
 
       if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        setWebrtcStatus(`Signaling unavailable (${status}).`)
+        setWebrtcFailure(
+          `Signaling unavailable (${status}).`,
+          "VFD_SIGNAL_CHANNEL_UNAVAILABLE",
+          undefined,
+          `status=${status}`
+        )
       }
     })
 
@@ -983,8 +1050,33 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     playerId,
     sendOfferForPeer,
     sendSignal,
+    setWebrtcFailure,
     state.players,
   ])
+
+  React.useEffect(() => {
+    if (!isVirtual || state.players.length <= 1) {
+      return
+    }
+
+    const hasAnyRemoteTracks = Object.values(remoteStreams).some(
+      (stream) => stream.getTracks().length > 0
+    )
+    if (hasAnyRemoteTracks || webrtcStatus) {
+      return
+    }
+
+    const timerId = window.setTimeout(() => {
+      setWebrtcFailure(
+        "Remote video stream not received yet.",
+        "VFD_REMOTE_STREAM_MISSING",
+        undefined,
+        `players=${state.players.length}`
+      )
+    }, 15000)
+
+    return () => window.clearTimeout(timerId)
+  }, [isVirtual, remoteStreams, setWebrtcFailure, state.players.length, webrtcStatus])
 
   React.useEffect(() => {
     if (!isVirtual) {
@@ -1326,6 +1418,28 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         {iceStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {iceStatus}
+          </div>
+        ) : null}
+        {videoErrorCode ? (
+          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-[11px] text-black shadow-[3px_3px_0_#000]">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-black/70">
+              Copy and send this code
+            </p>
+            <p className="mt-1 break-all font-mono text-[10px]">
+              {videoErrorCode}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof navigator === "undefined" || !navigator.clipboard) {
+                  return
+                }
+                void navigator.clipboard.writeText(videoErrorCode)
+              }}
+              className="mt-2 rounded-full border-2 border-black bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Copy Error Code
+            </button>
           </div>
         ) : null}
 
