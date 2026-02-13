@@ -156,14 +156,19 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     Record<string, MediaStream>
   >({})
   const [mediaError, setMediaError] = React.useState("")
+  const [webrtcStatus, setWebrtcStatus] = React.useState("")
   const [isMicMuted, setIsMicMuted] = React.useState(false)
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
   const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
+  const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
   )
+  const connectTimeoutsRef = React.useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map())
   const channelRef = React.useRef<ReturnType<
     typeof supabaseBrowser.channel
   > | null>(null)
@@ -228,10 +233,19 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       peer.ontrack = null
       peer.onicecandidate = null
       peer.onconnectionstatechange = null
+      peer.oniceconnectionstatechange = null
       peer.close()
     }
+
+    const timeoutId = connectTimeoutsRef.current.get(peerId)
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      connectTimeoutsRef.current.delete(peerId)
+    }
+
     peersRef.current.delete(peerId)
     peerModeRef.current.delete(peerId)
+    relayAttemptedRef.current.delete(peerId)
     pendingIceRef.current.delete(peerId)
     setRemoteStreams((current) => {
       if (!current[peerId]) {
@@ -242,6 +256,87 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       return next
     })
   }, [])
+
+  const scheduleConnectTimeout = React.useCallback(
+    (peerId: string, mode: PeerTransportMode) => {
+      const existing = connectTimeoutsRef.current.get(peerId)
+      if (existing) {
+        clearTimeout(existing)
+      }
+
+      const timeoutMs = mode === "p2p" ? 9000 : 12000
+      const timeoutId = setTimeout(() => {
+        const peer = peersRef.current.get(peerId)
+        if (!peer) {
+          return
+        }
+
+        if (
+          peer.connectionState === "connected" ||
+          peer.iceConnectionState === "connected" ||
+          peer.iceConnectionState === "completed"
+        ) {
+          return
+        }
+
+        if (
+          mode === "p2p" &&
+          hasTurnServer &&
+          !relayAttemptedRef.current.get(peerId) &&
+          playerId
+        ) {
+          setWebrtcStatus("P2P unstable. Retrying video through TURN relay...")
+          relayAttemptedRef.current.set(peerId, true)
+          cleanupPeer(peerId)
+          peerModeRef.current.set(peerId, "relay")
+          sendSignal({
+            type: "ready",
+            from: playerId,
+            to: peerId,
+            transport: "relay",
+          })
+          if (playerId < peerId) {
+            void (async () => {
+              try {
+                const relayPeer = createPeerConnection(peerId, "relay")
+                const offer = await relayPeer.createOffer()
+                await relayPeer.setLocalDescription(offer)
+                sendSignal({
+                  type: "offer",
+                  from: playerId,
+                  to: peerId,
+                  sdp: relayPeer.localDescription ?? offer,
+                  transport: "relay",
+                })
+              } catch (error) {
+                if (process.env.NODE_ENV === "development") {
+                  console.log("TURN_TIMEOUT_RETRY_OFFER_ERROR", {
+                    peerId,
+                    error,
+                  })
+                }
+              }
+            })()
+          }
+          return
+        }
+
+        if (mode === "p2p" && !hasTurnServer) {
+          setWebrtcStatus(
+            "P2P failed and TURN fallback is not configured in this deployment."
+          )
+        }
+
+        cleanupPeer(peerId)
+        setWebrtcStatus(
+          "Video connection failed for a player. Ask both players to refresh."
+        )
+      }, timeoutMs)
+
+      connectTimeoutsRef.current.set(peerId, timeoutId)
+    },
+    [cleanupPeer, hasTurnServer, playerId, sendSignal]
+  )
 
   const flushPendingIce = React.useCallback(
     async (peerId: string, peer: RTCPeerConnection) => {
@@ -299,9 +394,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         if (!event.candidate || !playerId) {
           return
         }
-        const candidate = event.candidate.toJSON
-          ? event.candidate.toJSON()
-          : event.candidate
+        const candidate: RTCIceCandidateInit = {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid ?? undefined,
+          sdpMLineIndex: event.candidate.sdpMLineIndex ?? undefined,
+          usernameFragment: event.candidate.usernameFragment ?? undefined,
+        }
         sendSignal({
           type: "ice",
           from: playerId,
@@ -321,6 +419,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           }
           return { ...current, [peerId]: stream }
         })
+
+        const timeoutId = connectTimeoutsRef.current.get(peerId)
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          connectTimeoutsRef.current.delete(peerId)
+        }
       }
 
       connection.onconnectionstatechange = () => {
@@ -334,6 +438,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         if (connection.connectionState === "closed") {
           cleanupPeer(peerId)
+          return
+        }
+
+        if (connection.connectionState === "connected") {
+          setWebrtcStatus("")
+          const timeoutId = connectTimeoutsRef.current.get(peerId)
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            connectTimeoutsRef.current.delete(peerId)
+          }
           return
         }
 
@@ -379,7 +493,29 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         cleanupPeer(peerId)
       }
 
+      connection.oniceconnectionstatechange = () => {
+        if (process.env.NODE_ENV === "development") {
+          console.log("PEER_ICE_STATE", {
+            peerId,
+            mode: peerModeRef.current.get(peerId) ?? mode,
+            state: connection.iceConnectionState,
+          })
+        }
+
+        if (
+          connection.iceConnectionState === "connected" ||
+          connection.iceConnectionState === "completed"
+        ) {
+          const timeoutId = connectTimeoutsRef.current.get(peerId)
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            connectTimeoutsRef.current.delete(peerId)
+          }
+        }
+      }
+
       peersRef.current.set(peerId, connection)
+      scheduleConnectTimeout(peerId, mode)
       return connection
     },
     [
@@ -388,6 +524,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       localStream,
       p2pIceServers,
       playerId,
+      scheduleConnectTimeout,
       sendSignal,
       turnServer,
     ]
@@ -901,6 +1038,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             {mediaError}
           </div>
         ) : null}
+        {webrtcStatus ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+            {webrtcStatus}
+          </div>
+        ) : null}
 
         <div className="relative rounded-3xl border-2 border-black bg-offwhite p-4 shadow-[6px_6px_0_#000]">
           <div className="flex items-center justify-between gap-3">
@@ -966,7 +1108,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                     </div>
                   ) : null}
                 </div>
-                <div className="hidden md:flex min-h-[520px] items-stretch gap-4">
+                <div className="hidden md:flex h-[min(72vh,760px)] min-h-[520px] items-stretch gap-4">
                   <div className="h-full w-1/2">
                     {activePlayer ? renderTile(activePlayer, "panel") : null}
                   </div>
