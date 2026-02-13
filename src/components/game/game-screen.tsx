@@ -157,6 +157,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   >({})
   const [mediaError, setMediaError] = React.useState("")
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
+  const [signalStatus, setSignalStatus] = React.useState("idle")
   const [isMicMuted, setIsMicMuted] = React.useState(false)
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
@@ -221,11 +222,28 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }
 
   const sendSignal = React.useCallback((payload: SignalPayload) => {
-    channelRef.current?.send({
-      type: "broadcast",
-      event: "signal",
-      payload,
-    })
+    const channel = channelRef.current
+    if (!channel) {
+      return
+    }
+
+    void channel
+      .send({
+        type: "broadcast",
+        event: "signal",
+        payload,
+      })
+      .then((result) => {
+        if (result !== "ok") {
+          setWebrtcStatus(`Signal send failed (${result}).`)
+        }
+      })
+      .catch((error) => {
+        if (process.env.NODE_ENV === "development") {
+          console.log("SIGNAL_SEND_ERROR", error)
+        }
+        setWebrtcStatus("Signal send failed.")
+      })
   }, [])
 
   const cleanupPeer = React.useCallback((peerId: string) => {
@@ -590,7 +608,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     const lobbyId = state.lobby.id
     const channel = supabaseBrowser
       .channel(`video-${lobbyId}`, {
-        config: { broadcast: { self: false } },
+        config: { broadcast: { self: true, ack: true } },
       })
       .on("broadcast", { event: "signal" }, async ({ payload }) => {
         try {
@@ -680,7 +698,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     let readyHeartbeat: ReturnType<typeof setInterval> | null = null
 
     channel.subscribe((status) => {
+      setSignalStatus(status)
       if (status === "SUBSCRIBED") {
+        setWebrtcStatus("")
         channel.send({
           type: "broadcast",
           event: "signal",
@@ -694,6 +714,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             payload: { type: "ready", from: playerId, transport: "p2p" },
           })
         }, 7000)
+        return
+      }
+
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        setWebrtcStatus(`Signaling unavailable (${status}).`)
       }
     })
 
@@ -1112,6 +1137,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             {mediaError}
           </div>
         ) : null}
+        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+          Signal: {signalStatus}
+        </div>
         {webrtcStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {webrtcStatus}
