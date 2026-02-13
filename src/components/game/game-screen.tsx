@@ -69,20 +69,42 @@ function VideoTile({
   card,
 }: VideoTileProps) {
   const videoRef = React.useRef<HTMLVideoElement | null>(null)
+  const [needsManualPlay, setNeedsManualPlay] = React.useState(false)
   const trackingEnabled = isActive && Boolean(stream)
   const anchor = useHeadAnchor(videoRef, trackingEnabled)
   const hasVideo = Boolean(
     stream?.getVideoTracks().some((track) => track.enabled)
   )
 
+  const tryPlay = React.useCallback(async () => {
+    const video = videoRef.current
+    if (!video) {
+      return
+    }
+    try {
+      await video.play()
+      setNeedsManualPlay(false)
+    } catch (error) {
+      if (process.env.NODE_ENV === "development") {
+        console.log("VIDEO_PLAY_BLOCKED", { name, error })
+      }
+      setNeedsManualPlay(true)
+    }
+  }, [name])
+
   React.useEffect(() => {
-    if (!videoRef.current) {
+    const video = videoRef.current
+    if (!video) {
       return
     }
     if (stream) {
-      videoRef.current.srcObject = stream
+      video.srcObject = stream
+      void tryPlay()
+    } else {
+      video.srcObject = null
+      setNeedsManualPlay(false)
     }
-  }, [stream])
+  }, [stream, tryPlay])
 
   const isGuesserViewer = isActive && isSelf && showPlaceholder
   const activeCard = isActive && !isSelf ? card : null
@@ -99,6 +121,9 @@ function VideoTile({
           autoPlay
           playsInline
           muted={isSelf}
+          onLoadedMetadata={() => {
+            void tryPlay()
+          }}
           className="h-full w-full object-cover"
         />
       ) : (
@@ -109,6 +134,19 @@ function VideoTile({
       {stream && !hasVideo ? (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70 text-xs font-semibold uppercase tracking-wide text-offwhite">
           Camera off
+        </div>
+      ) : null}
+      {stream && needsManualPlay ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/35">
+          <button
+            type="button"
+            onClick={() => {
+              void tryPlay()
+            }}
+            className="rounded-full border-2 border-black bg-offwhite px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+          >
+            Tap to start video
+          </button>
         </div>
       ) : null}
 

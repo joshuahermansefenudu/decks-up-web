@@ -47,6 +47,8 @@ export function useHeadAnchor(
   const lastDetectRef = React.useRef(0)
   const lastSeenRef = React.useRef(0)
   const landmarkerRef = React.useRef<FaceLandmarker | null>(null)
+  const detectFailureCountRef = React.useRef(0)
+  const detectDisabledRef = React.useRef(false)
 
   React.useEffect(() => {
     anchorRef.current = anchor
@@ -68,6 +70,16 @@ export function useHeadAnchor(
       .catch(() => {
         landmarkerRef.current = null
       })
+
+    const setFallbackAnchor = (width: number, height: number) => {
+      const nextAnchor = {
+        x: width * 0.5,
+        y: height * 0.22,
+        visible: false,
+      }
+      anchorRef.current = nextAnchor
+      setAnchor(nextAnchor)
+    }
 
     const tick = () => {
       if (!isActive) {
@@ -106,6 +118,12 @@ export function useHeadAnchor(
         return
       }
 
+      if (detectDisabledRef.current) {
+        setFallbackAnchor(width, height)
+        requestAnimationFrame(tick)
+        return
+      }
+
       const fallbackX = width * 0.5
       const fallbackY = height * 0.22
 
@@ -113,7 +131,16 @@ export function useHeadAnchor(
       try {
         const result = landmarker.detectForVideo(video, now)
         landmarks = result.faceLandmarks?.[0]
-      } catch {
+        detectFailureCountRef.current = 0
+      } catch (error) {
+        detectFailureCountRef.current += 1
+        if (process.env.NODE_ENV === "development") {
+          console.log("HEAD_TRACK_DETECT_ERROR", error)
+        }
+        if (detectFailureCountRef.current >= 3) {
+          detectDisabledRef.current = true
+        }
+        setFallbackAnchor(width, height)
         requestAnimationFrame(tick)
         return
       }
@@ -165,6 +192,8 @@ export function useHeadAnchor(
     return () => {
       isActive = false
       cancelAnimationFrame(rafId)
+      detectFailureCountRef.current = 0
+      detectDisabledRef.current = false
     }
   }, [enabled, videoRef])
 
