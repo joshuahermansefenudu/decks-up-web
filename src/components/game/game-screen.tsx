@@ -298,6 +298,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         payload,
       })
       .then((result) => {
+        if (result !== "ok" && process.env.NODE_ENV === "development") {
+          console.log("SIGNAL_SEND_RESULT", result)
+        }
         if (result !== "ok") {
           setWebrtcStatus(`Signal send failed (${result}).`)
         }
@@ -704,7 +707,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     const lobbyId = state.lobby.id
     const channel = supabaseBrowser
       .channel(`video-${lobbyId}`, {
-        config: { broadcast: { self: true, ack: true } },
+        config: { broadcast: { self: false } },
       })
       .on("broadcast", { event: "signal" }, async ({ payload }) => {
         try {
@@ -743,15 +746,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
             if (playerId < message.from) {
               await sendOfferForPeer(message.from, transportMode)
-            } else {
-              // If this side is not the offerer, ping back so the lower-id peer
-              // can initiate even when initial "ready" was missed on subscribe.
-              sendSignal({
-                type: "ready",
-                from: playerId,
-                to: message.from,
-                transport: transportMode,
-              })
             }
             return
           }
@@ -801,8 +795,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
     channelRef.current = channel
 
-    let readyHeartbeat: ReturnType<typeof setInterval> | null = null
-
     channel.subscribe((status) => {
       setSignalStatus(status)
       if (status === "SUBSCRIBED") {
@@ -816,18 +808,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             transport: forceTurn ? "relay" : "p2p",
           },
         })
-
-        readyHeartbeat = setInterval(() => {
-          channel.send({
-            type: "broadcast",
-            event: "signal",
-            payload: {
-              type: "ready",
-              from: playerId,
-              transport: forceTurn ? "relay" : "p2p",
-            },
-          })
-        }, 7000)
         return
       }
 
@@ -837,9 +817,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     })
 
     return () => {
-      if (readyHeartbeat) {
-        clearInterval(readyHeartbeat)
-      }
       channelRef.current = null
       supabaseBrowser.removeChannel(channel)
       peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
