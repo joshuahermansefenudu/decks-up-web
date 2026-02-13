@@ -73,7 +73,10 @@ function VideoTile({
   const hasVideo = Boolean(
     stream?.getVideoTracks().some((track) => track.enabled)
   )
-  const trackingEnabled = isActive && hasVideo
+  const headTrackingAllowed =
+    process.env.NODE_ENV === "production" ||
+    process.env.NEXT_PUBLIC_ENABLE_HEAD_TRACKING === "true"
+  const trackingEnabled = headTrackingAllowed && isActive && hasVideo
   const anchor = useHeadAnchor(videoRef, trackingEnabled)
 
   const tryPlay = React.useCallback(async () => {
@@ -772,6 +775,20 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const keepAwakeEnabled = hasSeenTutorial && state.lobby.status === "IN_GAME"
   const wakeLock = useKeepScreenAwake(keepAwakeEnabled)
   const turnKey = `${state.lobby.currentTurnIndex}-${state.lobby.currentCardIndex}`
+  const remoteTrackDebug = React.useMemo(() => {
+    const peers = Object.entries(remoteStreams)
+    if (!peers.length) {
+      return "none"
+    }
+    return peers
+      .map(([id, stream]) => {
+        const shortId = id.slice(-6)
+        const v = stream.getVideoTracks().length
+        const a = stream.getAudioTracks().length
+        return `${shortId}:v${v}/a${a}`
+      })
+      .join(" | ")
+  }, [remoteStreams])
   // Tweak duration/urgent thresholds here.
   // Timer checklist: starts on card, urgent at 10s, expires once, manual Next cancels, resets on turn change.
   const turnTimer = useTurnTimer({
@@ -1059,24 +1076,31 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       return
     }
 
-    const hasAnyRemoteTracks = Object.values(remoteStreams).some(
-      (stream) => stream.getTracks().length > 0
+    const hasAnyRemoteVideoTracks = Object.values(remoteStreams).some(
+      (stream) => stream.getVideoTracks().length > 0
     )
-    if (hasAnyRemoteTracks || webrtcStatus) {
+    if (hasAnyRemoteVideoTracks || webrtcStatus) {
       return
     }
 
     const timerId = window.setTimeout(() => {
       setWebrtcFailure(
-        "Remote video stream not received yet.",
-        "VFD_REMOTE_STREAM_MISSING",
+        "Remote video track not received yet.",
+        "VFD_REMOTE_VIDEO_TRACK_MISSING",
         undefined,
-        `players=${state.players.length}`
+        `players=${state.players.length}; remote=${remoteTrackDebug}`
       )
     }, 15000)
 
     return () => window.clearTimeout(timerId)
-  }, [isVirtual, remoteStreams, setWebrtcFailure, state.players.length, webrtcStatus])
+  }, [
+    isVirtual,
+    remoteStreams,
+    setWebrtcFailure,
+    state.players.length,
+    webrtcStatus,
+    remoteTrackDebug,
+  ])
 
   React.useEffect(() => {
     if (!isVirtual) {
@@ -1415,6 +1439,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             {signalDebug}
           </div>
         ) : null}
+        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+          Remote tracks: {remoteTrackDebug}
+        </div>
         {iceStatus ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
             {iceStatus}
