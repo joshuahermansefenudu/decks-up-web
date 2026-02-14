@@ -74,8 +74,7 @@ function VideoTile({
     stream?.getVideoTracks().some((track) => track.enabled)
   )
   const headTrackingAllowed =
-    process.env.NODE_ENV === "production" ||
-    process.env.NEXT_PUBLIC_ENABLE_HEAD_TRACKING === "true"
+    process.env.NEXT_PUBLIC_ENABLE_HEAD_TRACKING !== "false"
   const trackingEnabled = headTrackingAllowed && isActive && hasVideo
   const anchor = useHeadAnchor(videoRef, trackingEnabled)
 
@@ -208,6 +207,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
   const remoteMediaRef = React.useRef<Map<string, MediaStream>>(new Map())
   const peerModeRef = React.useRef<Map<string, PeerTransportMode>>(new Map())
+  const relayTimeoutAttemptsRef = React.useRef<Map<string, number>>(new Map())
   const relayAttemptedRef = React.useRef<Map<string, boolean>>(new Map())
   const relayCandidateSeenRef = React.useRef<Map<string, boolean>>(new Map())
   const iceTypesRef = React.useRef<Map<string, Set<string>>>(new Map())
@@ -243,13 +243,23 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     []
   )
   const turnServers = React.useMemo<RTCIceServer[]>(() => {
-    const turnUrl = process.env.NEXT_PUBLIC_TURN_URL ?? ""
-    const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME ?? ""
-    const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? ""
+    const turnUrl =
+      process.env.NEXT_PUBLIC_TURN_URL ??
+      process.env.NEXT_PUBLIC_TURN_SERVER ??
+      ""
+    const turnUsername =
+      process.env.NEXT_PUBLIC_TURN_USERNAME ??
+      process.env.NEXT_PUBLIC_TURN_USER ??
+      ""
+    const turnCredential =
+      process.env.NEXT_PUBLIC_TURN_CREDENTIAL ??
+      process.env.NEXT_PUBLIC_TURN_PASSWORD ??
+      ""
     const baseUrls = turnUrl
       .split(",")
       .map((url) => url.trim())
       .filter(Boolean)
+      .map((url) => (/^turns?:/i.test(url) ? url : `turn:${url}`))
 
     if (!baseUrls.length || !turnUsername || !turnCredential) {
       return []
@@ -276,6 +286,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [])
   const hasTurnServer = turnServers.length > 0
   const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === "true"
+  const preferredTransport: PeerTransportMode =
+    forceTurn && hasTurnServer ? "relay" : "p2p"
   const showNetworkDebug =
     process.env.NODE_ENV === "development" ||
     process.env.NEXT_PUBLIC_SHOW_NETWORK_DEBUG === "true"
@@ -432,6 +444,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     peerModeRef.current.delete(peerId)
     relayAttemptedRef.current.delete(peerId)
     relayCandidateSeenRef.current.delete(peerId)
+    relayTimeoutAttemptsRef.current.delete(peerId)
     iceTypesRef.current.delete(peerId)
     offerAttemptAtRef.current.delete(peerId)
     readySentAtRef.current.delete(peerId)
@@ -454,7 +467,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         clearTimeout(existing)
       }
 
-      const timeoutMs = mode === "p2p" ? 9000 : 12000
+      const timeoutMs = mode === "p2p" ? 9000 : 30000
       const timeoutId = setTimeout(() => {
         const peer = peersRef.current.get(peerId)
         if (!peer) {
@@ -504,17 +517,42 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           setWebrtcFailure(
             "TURN relay could not be established. Check TURN credentials and ports.",
             "VFD_RELAY_NO_CANDIDATE",
-            peerId
+            peerId,
+            `conn=${peer.connectionState};ice=${peer.iceConnectionState}`
           )
           cleanupPeer(peerId)
           return
+        }
+
+        if (mode === "relay") {
+          const attempts = (relayTimeoutAttemptsRef.current.get(peerId) ?? 0) + 1
+          relayTimeoutAttemptsRef.current.set(peerId, attempts)
+
+          if (
+            attempts < 2 &&
+            (peer.connectionState === "new" ||
+              peer.connectionState === "connecting" ||
+              peer.iceConnectionState === "new" ||
+              peer.iceConnectionState === "checking" ||
+              peer.iceConnectionState === "disconnected")
+          ) {
+            setWebrtcFailure(
+              "TURN relay is slow. Waiting a bit longer...",
+              "VFD_RELAY_SLOW_RETRY",
+              peerId,
+              `conn=${peer.connectionState};ice=${peer.iceConnectionState};attempt=${attempts}`
+            )
+            scheduleConnectTimeout(peerId, mode)
+            return
+          }
         }
 
         cleanupPeer(peerId)
         setWebrtcFailure(
           "Video connection failed for a player. Ask both players to refresh.",
           "VFD_PEER_CONNECT_FAILED",
-          peerId
+          peerId,
+          `conn=${peer.connectionState};ice=${peer.iceConnectionState}`
         )
       }, timeoutMs)
 
@@ -555,7 +593,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       const mode =
         requestedMode ??
         peerModeRef.current.get(peerId) ??
-        (forceTurn ? "relay" : "p2p")
+        preferredTransport
       peerModeRef.current.set(peerId, mode)
 
       const rtcConfig: RTCConfiguration =
@@ -761,7 +799,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       scheduleConnectTimeout,
       sendSignal,
       turnServers,
-      forceTurn,
+      preferredTransport,
       setWebrtcFailure,
     ]
   )
@@ -905,7 +943,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           }
 
           const transportMode: PeerTransportMode =
-            message.transport === "relay" ? "relay" : "p2p"
+            message.transport === "relay" && hasTurnServer ? "relay" : "p2p"
 
 	          if (message.type === "ready") {
 	            peerModeRef.current.set(message.from, transportMode)
@@ -989,7 +1027,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               payload: {
                 type: "ready",
                 from: playerId,
-                transport: forceTurn ? "relay" : "p2p",
+                transport: preferredTransport,
               },
             })
           }
@@ -1016,9 +1054,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     bumpSignalCount,
     cleanupPeer,
     createPeerConnection,
+    hasTurnServer,
     isVirtual,
     localStream,
     playerId,
+    preferredTransport,
     sendOfferForPeer,
     sendSignal,
     state.lobby.id,
@@ -1047,8 +1087,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           continue
         }
 
-        const mode =
-          peerModeRef.current.get(peerId) ?? (forceTurn ? "relay" : "p2p")
+        const mode = peerModeRef.current.get(peerId) ?? preferredTransport
 
         if (playerId < peerId) {
           const now = Date.now()
@@ -1094,14 +1133,27 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       clearInterval(intervalId)
     }
   }, [
-    forceTurn,
     isVirtual,
     localStream,
     playerId,
+    preferredTransport,
     sendOfferForPeer,
     sendSignal,
-	    state.players,
-	  ])
+    state.players,
+  ])
+
+  React.useEffect(() => {
+    if (!isVirtual || !forceTurn || hasTurnServer) {
+      return
+    }
+
+    setWebrtcFailure(
+      "TURN is forced but TURN env is missing on this client build.",
+      "VFD_FORCE_TURN_NO_CONFIG",
+      undefined,
+      "required=NEXT_PUBLIC_TURN_URL,NEXT_PUBLIC_TURN_USERNAME,NEXT_PUBLIC_TURN_CREDENTIAL"
+    )
+  }, [forceTurn, hasTurnServer, isVirtual, setWebrtcFailure])
 
   React.useEffect(() => {
     if (!isVirtual || state.players.length <= 1) {
