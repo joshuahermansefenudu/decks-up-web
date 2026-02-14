@@ -17,6 +17,11 @@ Client:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
+Virtual mode (WebRTC fallback):
+- `NEXT_PUBLIC_TURN_URL` (comma-separated TURN/TURNS URLs from provider)
+- `NEXT_PUBLIC_TURN_USERNAME`
+- `NEXT_PUBLIC_TURN_CREDENTIAL`
+
 Optional (ads, production only):
 - `NEXT_PUBLIC_ADSENSE_CLIENT`
 - `NEXT_PUBLIC_ADSENSE_SLOT`

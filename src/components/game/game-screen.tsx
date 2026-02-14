@@ -243,18 +243,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     []
   )
   const turnServers = React.useMemo<RTCIceServer[]>(() => {
-    const turnUrl =
-      process.env.NEXT_PUBLIC_TURN_URL ??
-      process.env.NEXT_PUBLIC_TURN_SERVER ??
-      ""
-    const turnUsername =
-      process.env.NEXT_PUBLIC_TURN_USERNAME ??
-      process.env.NEXT_PUBLIC_TURN_USER ??
-      ""
-    const turnCredential =
-      process.env.NEXT_PUBLIC_TURN_CREDENTIAL ??
-      process.env.NEXT_PUBLIC_TURN_PASSWORD ??
-      ""
+    const turnUrl = process.env.NEXT_PUBLIC_TURN_URL ?? ""
+    const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME ?? ""
+    const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? ""
     const baseUrls = turnUrl
       .split(",")
       .map((url) => url.trim())
@@ -265,20 +256,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       return []
     }
 
-    const urls = new Set(baseUrls)
-    const first = baseUrls[0] ?? ""
-    const match = first.match(/^(?:turns?:)?([^:/?]+)/i)
-    const host = match?.[1]
-
-    if (host) {
-      urls.add(`turn:${host}:80?transport=tcp`)
-      urls.add(`turn:${host}:443?transport=tcp`)
-      urls.add(`turns:${host}:443?transport=tcp`)
-    }
-
     return [
       {
-        urls: Array.from(urls),
+        urls: baseUrls,
         username: turnUsername,
         credential: turnCredential,
       },
