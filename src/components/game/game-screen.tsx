@@ -60,6 +60,46 @@ type VideoTileProps = {
   card: Card | null
 }
 
+function normalizeIceServers(input: unknown): RTCIceServer[] {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const servers: RTCIceServer[] = []
+  for (const server of input) {
+    const record =
+      typeof server === "object" && server !== null
+        ? (server as Record<string, unknown>)
+        : null
+    if (!record) {
+      continue
+    }
+
+    const urlsValue = record.urls
+    const normalizedUrls = Array.isArray(urlsValue)
+      ? urlsValue.filter((url): url is string => typeof url === "string")
+      : typeof urlsValue === "string"
+        ? [urlsValue]
+        : []
+    if (!normalizedUrls.length) {
+      continue
+    }
+
+    const username =
+      typeof record.username === "string" ? record.username : undefined
+    const credential =
+      typeof record.credential === "string" ? record.credential : undefined
+
+    servers.push({
+      urls: normalizedUrls,
+      ...(username ? { username } : {}),
+      ...(credential ? { credential } : {}),
+    })
+  }
+
+  return servers
+}
+
 function VideoTile({
   stream,
   name,
@@ -242,32 +282,15 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     ],
     []
   )
-  const turnServers = React.useMemo<RTCIceServer[]>(() => {
-    const turnUrl = process.env.NEXT_PUBLIC_TURN_URL ?? ""
-    const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME ?? ""
-    const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL ?? ""
-    const baseUrls = turnUrl
-      .split(",")
-      .map((url) => url.trim())
-      .filter(Boolean)
-      .map((url) => (/^turns?:/i.test(url) ? url : `turn:${url}`))
-
-    if (!baseUrls.length || !turnUsername || !turnCredential) {
-      return []
-    }
-
-    return [
-      {
-        urls: baseUrls,
-        username: turnUsername,
-        credential: turnCredential,
-      },
-    ]
-  }, [])
+  const [turnServers, setTurnServers] = React.useState<RTCIceServer[]>([])
+  const [turnConfigLoaded, setTurnConfigLoaded] = React.useState(false)
+  const [turnConfigError, setTurnConfigError] = React.useState("")
   const hasTurnServer = turnServers.length > 0
   const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === "true"
   const preferredTransport: PeerTransportMode =
     forceTurn && hasTurnServer ? "relay" : "p2p"
+  const isVirtual = state.lobby.mode === "VIRTUAL"
+  const isActive = state.lobby.activePlayerId === playerId
   const showNetworkDebug =
     process.env.NODE_ENV === "development" ||
     process.env.NEXT_PUBLIC_SHOW_NETWORK_DEBUG === "true"
@@ -336,6 +359,57 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     },
     [updateSignalDebug]
   )
+
+  React.useEffect(() => {
+    if (!isVirtual) {
+      setTurnServers([])
+      setTurnConfigLoaded(false)
+      setTurnConfigError("")
+      return
+    }
+
+    let cancelled = false
+
+    const loadIceServers = async () => {
+      try {
+        const response = await fetch("/api/webrtc/ice", { cache: "no-store" })
+        if (!response.ok) {
+          const payload = (await response
+            .json()
+            .catch(() => null)) as { error?: string } | null
+          if (cancelled) {
+            return
+          }
+          setTurnServers([])
+          setTurnConfigLoaded(true)
+          setTurnConfigError(payload?.error ?? `status=${response.status}`)
+          return
+        }
+
+        const payload = (await response.json()) as { iceServers?: unknown }
+        if (cancelled) {
+          return
+        }
+
+        setTurnServers(normalizeIceServers(payload.iceServers))
+        setTurnConfigLoaded(true)
+        setTurnConfigError("")
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+        setTurnServers([])
+        setTurnConfigLoaded(true)
+        setTurnConfigError(String((error as Error | undefined)?.message ?? error))
+      }
+    }
+
+    void loadIceServers()
+
+    return () => {
+      cancelled = true
+    }
+  }, [isVirtual])
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -806,8 +880,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     [createPeerConnection, playerId, sendSignal]
   )
 
-  const isVirtual = state.lobby.mode === "VIRTUAL"
-  const isActive = state.lobby.activePlayerId === playerId
   const keepAwakeEnabled = hasSeenTutorial && state.lobby.status === "IN_GAME"
   const wakeLock = useKeepScreenAwake(keepAwakeEnabled)
   const turnKey = `${state.lobby.currentTurnIndex}-${state.lobby.currentCardIndex}`
@@ -890,6 +962,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
   React.useEffect(() => {
     if (!isVirtual || !playerId || !localStream) {
+      return
+    }
+    if (forceTurn && !turnConfigLoaded) {
       return
     }
     if (typeof RTCPeerConnection === "undefined") {
@@ -1039,6 +1114,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     localStream,
     playerId,
     preferredTransport,
+    forceTurn,
+    turnConfigLoaded,
     sendOfferForPeer,
     sendSignal,
     state.lobby.id,
@@ -1046,6 +1123,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
   React.useEffect(() => {
     if (!isVirtual || !playerId || !localStream) {
+      return
+    }
+    if (forceTurn && !turnConfigLoaded) {
       return
     }
 
@@ -1117,23 +1197,32 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     localStream,
     playerId,
     preferredTransport,
+    forceTurn,
+    turnConfigLoaded,
     sendOfferForPeer,
     sendSignal,
     state.players,
   ])
 
   React.useEffect(() => {
-    if (!isVirtual || !forceTurn || hasTurnServer) {
+    if (!isVirtual || !forceTurn || !turnConfigLoaded || hasTurnServer) {
       return
     }
 
     setWebrtcFailure(
-      "TURN is forced but TURN env is missing on this client build.",
+      "TURN is forced but no ICE servers were returned by /api/webrtc/ice.",
       "VFD_FORCE_TURN_NO_CONFIG",
       undefined,
-      "required=NEXT_PUBLIC_TURN_URL,NEXT_PUBLIC_TURN_USERNAME,NEXT_PUBLIC_TURN_CREDENTIAL"
+      turnConfigError || "check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
     )
-  }, [forceTurn, hasTurnServer, isVirtual, setWebrtcFailure])
+  }, [
+    forceTurn,
+    hasTurnServer,
+    isVirtual,
+    setWebrtcFailure,
+    turnConfigError,
+    turnConfigLoaded,
+  ])
 
   React.useEffect(() => {
     if (!isVirtual || state.players.length <= 1) {

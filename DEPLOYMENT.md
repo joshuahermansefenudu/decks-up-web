@@ -17,10 +17,11 @@ Client:
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-Virtual mode (WebRTC fallback):
-- `NEXT_PUBLIC_TURN_URL` (comma-separated TURN/TURNS URLs from provider)
-- `NEXT_PUBLIC_TURN_USERNAME`
-- `NEXT_PUBLIC_TURN_CREDENTIAL`
+Virtual mode (Twilio NTS):
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_TURN_TTL` (optional)
+- `NEXT_PUBLIC_FORCE_TURN` (optional, set `true` for relay-only testing)
 
 Optional (ads, production only):
 - `NEXT_PUBLIC_ADSENSE_CLIENT`
