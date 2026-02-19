@@ -15,6 +15,25 @@ const LANDMARKER_WASM_URL =
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
 
 let landmarkerPromise: Promise<FaceLandmarker> | null = null
+let xnnpackNoisePatched = false
+
+function patchXnnpackNoiseLog() {
+  if (xnnpackNoisePatched || typeof window === "undefined") {
+    return
+  }
+
+  const originalConsoleError = console.error.bind(console)
+  console.error = (...args: unknown[]) => {
+    const firstArg = args[0]
+    const message = typeof firstArg === "string" ? firstArg : ""
+    if (message.includes("Created TensorFlow Lite XNNPACK delegate for CPU")) {
+      return
+    }
+    originalConsoleError(...args)
+  }
+
+  xnnpackNoisePatched = true
+}
 
 async function getLandmarker() {
   if (!landmarkerPromise) {
@@ -57,6 +76,10 @@ export function useHeadAnchor(
   React.useEffect(() => {
     if (!enabled || typeof window === "undefined") {
       return
+    }
+
+    if (process.env.NODE_ENV === "development") {
+      patchXnnpackNoiseLog()
     }
 
     let isActive = true
