@@ -1956,11 +1956,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             Remote tracks: {remoteTrackDebug}
           </div>
         ) : null}
-        {showNetworkDebug && iceStatus ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            {iceStatus}
-          </div>
-        ) : null}
+        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+          {iceStatus || "ICE candidates: checking..."}
+        </div>
         {videoErrorCode ? (
           <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-[11px] text-black shadow-[3px_3px_0_#000]">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-black/70">
