@@ -53,6 +53,41 @@ function normalizeIceServers(input: unknown): TwilioIceServer[] {
   return servers
 }
 
+function ensureTurnTransportServers(servers: TwilioIceServer[]): TwilioIceServer[] {
+  const existingUrls = new Set<string>()
+  for (const server of servers) {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls]
+    for (const value of urls) {
+      if (typeof value === "string") {
+        existingUrls.add(value.toLowerCase())
+      }
+    }
+  }
+
+  const credentialedServer = servers.find(
+    (server) => server.username && server.credential
+  )
+  if (!credentialedServer?.username || !credentialedServer.credential) {
+    return servers
+  }
+
+  const requiredTurnUrls = [
+    "turn:global.turn.twilio.com:3478?transport=udp",
+    "turn:global.turn.twilio.com:3478?transport=tcp",
+    "turns:global.turn.twilio.com:443?transport=tcp",
+  ]
+
+  const additionalServers = requiredTurnUrls
+    .filter((url) => !existingUrls.has(url.toLowerCase()))
+    .map((url) => ({
+      urls: [url],
+      username: credentialedServer.username,
+      credential: credentialedServer.credential,
+    }))
+
+  return [...servers, ...additionalServers]
+}
+
 export async function GET() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID?.trim()
   const authToken = process.env.TWILIO_AUTH_TOKEN?.trim()
@@ -95,7 +130,9 @@ export async function GET() {
     }
 
     const tokenPayload = (await tokenResponse.json()) as TwilioTokenResponse
-    const iceServers = normalizeIceServers(tokenPayload.ice_servers)
+    const iceServers = ensureTurnTransportServers(
+      normalizeIceServers(tokenPayload.ice_servers)
+    )
 
     if (!iceServers.length) {
       return NextResponse.json(

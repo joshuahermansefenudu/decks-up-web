@@ -21,7 +21,6 @@ Virtual mode (Twilio NTS):
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
 - `TWILIO_TURN_TTL` (optional)
-- `NEXT_PUBLIC_FORCE_TURN` (optional, set `true` for relay-only testing)
 
 Optional (ads, production only):
 - `NEXT_PUBLIC_ADSENSE_CLIENT`

@@ -50,6 +50,17 @@ type GameScreenProps = {
 }
 
 type PeerTransportMode = "p2p" | "relay"
+type VideoProfileType = "p2p" | "relay"
+
+const VIDEO_PROFILE: Record<
+  VideoProfileType,
+  { width: number; height: number; maxFramerate: number; maxBitrate: number }
+> = {
+  // P2P first keeps quality higher while avoiding relay costs.
+  p2p: { width: 640, height: 480, maxFramerate: 24, maxBitrate: 600_000 },
+  // TURN is manual and lower bitrate to reduce relay bandwidth costs.
+  relay: { width: 640, height: 360, maxFramerate: 20, maxBitrate: 400_000 },
+}
 
 type VideoTileProps = {
   stream: MediaStream | null
@@ -243,6 +254,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [signalDebug, setSignalDebug] = React.useState("")
   const [isMicMuted, setIsMicMuted] = React.useState(false)
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
+  const [isRelayUsageActive, setIsRelayUsageActive] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
   const remoteMediaRef = React.useRef<Map<string, MediaStream>>(new Map())
@@ -266,6 +278,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const previousPreferredTransportRef = React.useRef<PeerTransportMode | null>(
     null
   )
+  const relayUsageStartedAtRef = React.useRef<number | null>(null)
   const lastSignalDebugUpdateRef = React.useRef(0)
   const signalStatusRef = React.useRef(signalStatus)
   const subscribedReadyAtRef = React.useRef(0)
@@ -282,6 +295,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     () => [
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:global.stun.twilio.com:3478" },
     ],
     []
   )
@@ -289,11 +303,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [turnConfigLoaded, setTurnConfigLoaded] = React.useState(false)
   const [turnConfigError, setTurnConfigError] = React.useState("")
   const hasTurnServer = turnServers.length > 0
-  const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === "true"
+  const [turnToggleUnlocked, setTurnToggleUnlocked] =
+    React.useState<boolean>(false)
   const [requestedTransport, setRequestedTransport] =
-    React.useState<PeerTransportMode>(forceTurn ? "relay" : "p2p")
+    React.useState<PeerTransportMode>("p2p")
   const preferredTransport: PeerTransportMode =
     requestedTransport === "relay" && hasTurnServer ? "relay" : "p2p"
+  const isTurnSwitchDisabled =
+    requestedTransport === "p2p" && !turnToggleUnlocked
   const isVirtual = state.lobby.mode === "VIRTUAL"
   const isActive = state.lobby.activePlayerId === playerId
   const showNetworkDebug =
@@ -334,6 +351,95 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     [updateSignalDebug]
   )
 
+  const applySenderVideoProfile = React.useCallback(
+    async (sender: RTCRtpSender, profileType: VideoProfileType) => {
+      if (sender.track?.kind !== "video") {
+        return
+      }
+
+      const profile = VIDEO_PROFILE[profileType]
+      const parameters = sender.getParameters()
+      const nextEncodings =
+        parameters.encodings && parameters.encodings.length > 0
+          ? [...parameters.encodings]
+          : [{}]
+
+      nextEncodings[0] = {
+        ...nextEncodings[0],
+        maxBitrate: profile.maxBitrate,
+        maxFramerate: profile.maxFramerate,
+      }
+
+      try {
+        await sender.setParameters({
+          ...parameters,
+          encodings: nextEncodings,
+        })
+      } catch {
+        // Some browsers do not allow changing sender params at all times.
+      }
+    },
+    []
+  )
+
+  const applyVideoProfile = React.useCallback(
+    async (profileType: VideoProfileType) => {
+      if (!localStream) {
+        return
+      }
+
+      const profile = VIDEO_PROFILE[profileType]
+      const videoTrack = localStream.getVideoTracks()[0]
+
+      if (videoTrack) {
+        try {
+          await videoTrack.applyConstraints({
+            width: { ideal: profile.width, max: profile.width },
+            height: { ideal: profile.height, max: profile.height },
+            frameRate: {
+              ideal: profile.maxFramerate,
+              max: profile.maxFramerate,
+            },
+          })
+        } catch {
+          // Gracefully ignore unsupported constraints.
+        }
+      }
+
+      const peerConnections = Array.from(peersRef.current.values())
+      await Promise.all(
+        peerConnections.flatMap((peer) =>
+          peer.getSenders().map((sender) =>
+            applySenderVideoProfile(sender, profileType)
+          )
+        )
+      )
+    },
+    [applySenderVideoProfile, localStream]
+  )
+
+  const updateRelayBillingState = React.useCallback((isActive: boolean) => {
+    if (isActive) {
+      if (relayUsageStartedAtRef.current === null) {
+        relayUsageStartedAtRef.current = Date.now()
+        // TODO: Trigger billing credit deduction start when relay begins.
+        console.log("RELAY_USAGE_START", {
+          startedAt: relayUsageStartedAtRef.current,
+        })
+      }
+      setIsRelayUsageActive(true)
+      return
+    }
+
+    if (relayUsageStartedAtRef.current !== null) {
+      const durationMs = Date.now() - relayUsageStartedAtRef.current
+      // TODO: Send relay duration to backend for billing reconciliation.
+      console.log("RELAY_USAGE_STOP", { durationMs })
+      relayUsageStartedAtRef.current = null
+    }
+    setIsRelayUsageActive(false)
+  }, [])
+
   const setWebrtcFailure = React.useCallback(
     (
       statusMessage: string,
@@ -344,6 +450,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       setWebrtcStatus(statusMessage)
       const c = signalCountsRef.current
       const mode = peerId ? peerModeRef.current.get(peerId) ?? "unknown" : "na"
+      const isP2pFailure =
+        code.startsWith("VFD_P2P_") ||
+        (mode === "p2p" && code === "VFD_CONNECTION_STATE_FAILED")
+      if (isP2pFailure) {
+        setTurnToggleUnlocked(true)
+      }
       const ice = peerId
         ? Array.from(iceTypesRef.current.get(peerId) ?? []).join(",") || "none"
         : "na"
@@ -365,36 +477,31 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     [updateSignalDebug]
   )
 
+  const enableTurnMode = React.useCallback(() => {
+    if (!turnConfigLoaded) {
+      setWebrtcFailure("TURN setup is still loading.", "VFD_TURN_SETUP_LOADING")
+      return
+    }
+    if (!hasTurnServer) {
+      setWebrtcFailure(
+        "TURN is unavailable. Check /api/webrtc/ice.",
+        "VFD_TURN_UNAVAILABLE",
+        undefined,
+        turnConfigError || "no_ice_servers"
+      )
+      return
+    }
+    setRequestedTransport("relay")
+  }, [hasTurnServer, setWebrtcFailure, turnConfigError, turnConfigLoaded])
+
   const handleTransportToggle = React.useCallback(() => {
     if (requestedTransport === "p2p") {
-      if (!turnConfigLoaded) {
-        setWebrtcFailure(
-          "TURN setup is still loading.",
-          "VFD_TURN_SETUP_LOADING"
-        )
-        return
-      }
-      if (!hasTurnServer) {
-        setWebrtcFailure(
-          "TURN is unavailable. Check /api/webrtc/ice.",
-          "VFD_TURN_UNAVAILABLE",
-          undefined,
-          turnConfigError || "no_ice_servers"
-        )
-        return
-      }
-      setRequestedTransport("relay")
+      enableTurnMode()
       return
     }
 
     setRequestedTransport("p2p")
-  }, [
-    hasTurnServer,
-    requestedTransport,
-    setWebrtcFailure,
-    turnConfigError,
-    turnConfigLoaded,
-  ])
+  }, [enableTurnMode, requestedTransport])
 
   React.useEffect(() => {
     if (!isVirtual) {
@@ -575,23 +682,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         if (
           mode === "p2p" &&
           hasTurnServer &&
-          !relayAttemptedRef.current.get(peerId) &&
-          playerId
+          !relayAttemptedRef.current.get(peerId)
         ) {
           setWebrtcFailure(
-            "P2P unstable. Retrying video through TURN relay...",
-            "VFD_P2P_TIMEOUT_RETRY_RELAY",
+            "Direct connection failed. Enable relay mode?",
+            "VFD_P2P_TIMEOUT_UNLOCKED",
             peerId
           )
           relayAttemptedRef.current.set(peerId, true)
-          cleanupPeer(peerId)
-          peerModeRef.current.set(peerId, "relay")
-          sendSignal({
-            type: "ready",
-            from: playerId,
-            to: peerId,
-            transport: "relay",
-          })
           return
         }
 
@@ -648,7 +746,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
       connectTimeoutsRef.current.set(peerId, timeoutId)
     },
-    [cleanupPeer, hasTurnServer, playerId, sendSignal, setWebrtcFailure]
+    [cleanupPeer, hasTurnServer, setWebrtcFailure]
   )
 
   const flushPendingIce = React.useCallback(
@@ -674,28 +772,25 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   )
 
   const createPeerConnection = React.useCallback(
-    (peerId: string, requestedMode?: PeerTransportMode) => {
+    (peerId: string, stunOnly = preferredTransport !== "relay") => {
       const existing = peersRef.current.get(peerId)
       if (existing) {
         return existing
       }
 
-      const mode =
-        requestedMode ??
-        peerModeRef.current.get(peerId) ??
-        preferredTransport
+      const mode: PeerTransportMode = stunOnly ? "p2p" : "relay"
       peerModeRef.current.set(peerId, mode)
 
       const rtcConfig: RTCConfiguration =
         mode === "relay" && hasTurnServer
           ? {
               iceServers: turnServers,
+              // TURN over TLS 443 is most reliable through strict networks/firewalls.
               iceTransportPolicy: "relay",
             }
           : {
-              iceServers: hasTurnServer
-                ? [...p2pIceServers, ...turnServers]
-                : p2pIceServers,
+              // P2P first (STUN only) keeps media direct and avoids relay cost.
+              iceServers: p2pIceServers,
             }
 
       const connection = new RTCPeerConnection({
@@ -704,10 +799,15 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
       if (localStream) {
         localStream.getTracks().forEach((track) => {
-          connection.addTrack(track, localStream)
+          const sender = connection.addTrack(track, localStream)
+          void applySenderVideoProfile(
+            sender,
+            mode === "relay" ? "relay" : "p2p"
+          )
         })
       }
 
+      // Trickle ICE: send candidates as they are discovered for faster setup.
       connection.onicecandidate = (event) => {
         if (!event.candidate || !playerId) {
           return
@@ -812,6 +912,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         if (connection.connectionState === "connected") {
           setWebrtcStatus("")
           setVideoErrorCode("")
+          if (mode === "p2p") {
+            setTurnToggleUnlocked(false)
+          }
           const timeoutId = connectTimeoutsRef.current.get(peerId)
           if (timeoutId) {
             clearTimeout(timeoutId)
@@ -825,21 +928,13 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         }
 
         const currentMode = peerModeRef.current.get(peerId) ?? mode
-        if (currentMode === "p2p" && hasTurnServer && playerId) {
+        if (currentMode === "p2p" && hasTurnServer) {
           setWebrtcFailure(
-            "P2P failed. Switching to TURN relay...",
-            "VFD_P2P_FAILED_SWITCH_RELAY",
+            "Direct connection failed. Enable relay mode?",
+            "VFD_P2P_FAILED_UNLOCKED",
             peerId
           )
           cleanupPeer(peerId)
-          peerModeRef.current.set(peerId, "relay")
-
-          sendSignal({
-            type: "ready",
-            from: playerId,
-            to: peerId,
-            transport: "relay",
-          })
           return
         }
 
@@ -864,6 +959,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           connection.iceConnectionState === "connected" ||
           connection.iceConnectionState === "completed"
         ) {
+          if (mode === "p2p") {
+            setTurnToggleUnlocked(false)
+          }
           const typeSet = iceTypesRef.current.get(peerId)
           if (typeSet?.size) {
             setIceStatus(`Connected via ICE: ${Array.from(typeSet).join(", ")}`)
@@ -874,6 +972,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             connectTimeoutsRef.current.delete(peerId)
           }
         }
+
+        if (connection.iceConnectionState === "failed" && mode === "p2p") {
+          setWebrtcFailure(
+            "Direct connection failed. Enable relay mode?",
+            "VFD_P2P_ICE_FAILED_UNLOCKED",
+            peerId
+          )
+        }
       }
 
       peersRef.current.set(peerId, connection)
@@ -881,6 +987,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       return connection
     },
     [
+      applySenderVideoProfile,
       cleanupPeer,
       hasTurnServer,
       localStream,
@@ -901,7 +1008,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       }
 
       const selectedMode = mode ?? peerModeRef.current.get(peerId) ?? "p2p"
-      const peer = createPeerConnection(peerId, selectedMode)
+      const peer = createPeerConnection(peerId, selectedMode === "p2p")
       const offer = await peer.createOffer()
       await peer.setLocalDescription(offer)
 
@@ -933,6 +1040,115 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       })
       .join(" | ")
   }, [remoteStreams])
+
+  const detectRelayUsage = React.useCallback(async () => {
+    let relayDetected = false
+    const peers = Array.from(peersRef.current.values())
+
+    for (const peer of peers) {
+      if (
+        peer.connectionState !== "connected" &&
+        peer.iceConnectionState !== "connected" &&
+        peer.iceConnectionState !== "completed"
+      ) {
+        continue
+      }
+
+      try {
+        const stats = await peer.getStats()
+        let selectedPair: RTCStats | null = null
+
+        stats.forEach((report) => {
+          if (report.type !== "transport") {
+            return
+          }
+          const transportReport = report as RTCTransportStats
+          if (!transportReport.selectedCandidatePairId) {
+            return
+          }
+          selectedPair =
+            stats.get(transportReport.selectedCandidatePairId) ?? selectedPair
+        })
+
+        if (!selectedPair) {
+          stats.forEach((report) => {
+            if (report.type !== "candidate-pair") {
+              return
+            }
+            const candidatePairReport = report as RTCIceCandidatePairStats
+            if (
+              candidatePairReport.nominated &&
+              candidatePairReport.state === "succeeded"
+            ) {
+              selectedPair = candidatePairReport
+            }
+          })
+        }
+
+        if (!selectedPair) {
+          continue
+        }
+
+        const candidatePairReport = selectedPair as RTCIceCandidatePairStats
+        const localCandidate = candidatePairReport.localCandidateId
+          ? stats.get(candidatePairReport.localCandidateId)
+          : undefined
+        const remoteCandidate = candidatePairReport.remoteCandidateId
+          ? stats.get(candidatePairReport.remoteCandidateId)
+          : undefined
+
+        const localType =
+          localCandidate &&
+          typeof (localCandidate as Record<string, unknown>).candidateType ===
+            "string"
+            ? ((localCandidate as Record<string, unknown>)
+                .candidateType as string)
+            : undefined
+        const remoteType =
+          remoteCandidate &&
+          typeof (remoteCandidate as Record<string, unknown>).candidateType ===
+            "string"
+            ? ((remoteCandidate as Record<string, unknown>)
+                .candidateType as string)
+            : undefined
+
+        if (localType === "relay" || remoteType === "relay") {
+          relayDetected = true
+          break
+        }
+      } catch {
+        // Ignore transient stats read errors.
+      }
+    }
+
+    updateRelayBillingState(relayDetected)
+  }, [updateRelayBillingState])
+
+  React.useEffect(() => {
+    if (!isVirtual) {
+      updateRelayBillingState(false)
+      return
+    }
+
+    let stopped = false
+    const run = async () => {
+      if (stopped) {
+        return
+      }
+      await detectRelayUsage()
+    }
+
+    void run()
+    const intervalId = window.setInterval(() => {
+      void run()
+    }, 3000)
+
+    return () => {
+      stopped = true
+      window.clearInterval(intervalId)
+      updateRelayBillingState(false)
+    }
+  }, [detectRelayUsage, isVirtual, updateRelayBillingState])
   // Tweak duration/urgent thresholds here.
   // Timer checklist: starts on card, urgent at 10s, expires once, manual Next cancels, resets on turn change.
   const turnTimer = useTurnTimer({
@@ -956,6 +1172,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [isMicMuted, isVideoMuted, localStream])
 
   React.useEffect(() => {
+    if (!isVirtual || !localStream) {
+      return
+    }
+
+    const profileType: VideoProfileType =
+      preferredTransport === "relay" ? "relay" : "p2p"
+    void applyVideoProfile(profileType)
+  }, [applyVideoProfile, isVirtual, localStream, preferredTransport])
+
+  React.useEffect(() => {
     if (!isVirtual || !playerId) {
       return
     }
@@ -969,8 +1195,17 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         return
       }
       try {
+        const p2pProfile = VIDEO_PROFILE.p2p
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user" },
+          video: {
+            facingMode: "user",
+            width: { ideal: p2pProfile.width, max: p2pProfile.width },
+            height: { ideal: p2pProfile.height, max: p2pProfile.height },
+            frameRate: {
+              ideal: p2pProfile.maxFramerate,
+              max: p2pProfile.maxFramerate,
+            },
+          },
           audio: true,
         })
         if (cancelled) {
@@ -1061,7 +1296,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
           if (message.type === "offer" && message.sdp) {
             peerModeRef.current.set(message.from, transportMode)
-            const peer = createPeerConnection(message.from, transportMode)
+            const peer = createPeerConnection(
+              message.from,
+              transportMode === "p2p"
+            )
             await peer.setRemoteDescription(message.sdp)
             await flushPendingIce(message.from, peer)
             const answer = await peer.createAnswer()
@@ -1077,14 +1315,20 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           }
 
           if (message.type === "answer" && message.sdp) {
-            const peer = createPeerConnection(message.from)
+            const peer = createPeerConnection(
+              message.from,
+              transportMode === "p2p"
+            )
             await peer.setRemoteDescription(message.sdp)
             await flushPendingIce(message.from, peer)
             return
           }
 
           if (message.type === "ice" && message.candidate) {
-            const peer = createPeerConnection(message.from)
+            const peer = createPeerConnection(
+              message.from,
+              transportMode === "p2p"
+            )
 
             if (!peer.remoteDescription) {
               const queued = pendingIceRef.current.get(message.from) ?? []
@@ -1632,19 +1876,29 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           >
             {isVideoMuted ? "Turn Camera On" : "Turn Camera Off"}
           </button>
-          <div className="flex items-center gap-2 rounded-full border-2 border-black bg-offwhite px-3 py-1 shadow-[2px_2px_0_#000]">
+          <div
+            className={`flex items-center gap-2 rounded-full border-2 border-black px-3 py-1 shadow-[2px_2px_0_#000] ${
+              isTurnSwitchDisabled ? "bg-lightgray" : "bg-offwhite"
+            }`}
+          >
             <span className="text-[10px] font-semibold uppercase tracking-wide text-black">
-              Turn
+              Enable TURN fallback
             </span>
             <button
               type="button"
               role="switch"
               aria-checked={preferredTransport === "relay"}
               aria-label="Toggle TURN relay"
+              disabled={isTurnSwitchDisabled}
               onClick={handleTransportToggle}
               className={`relative h-7 w-14 rounded-full border-2 border-black transition-colors ${
                 preferredTransport === "relay" ? "bg-primary" : "bg-lightgray"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+              title={
+                isTurnSwitchDisabled
+                  ? "TURN unlocks after a P2P failure."
+                  : undefined
+              }
             >
               <span
                 className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-black transition-transform ${
@@ -1668,6 +1922,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               ? " (TURN unavailable)"
               : ""}
         </div>
+        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+          Relay usage: {isRelayUsageActive ? "active" : "inactive"}
+        </div>
+        {isTurnSwitchDisabled ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+            TURN switch unlocks after P2P fails.
+          </div>
+        ) : null}
 
         {mediaError ? (
           <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm font-semibold text-black shadow-[3px_3px_0_#000]">
