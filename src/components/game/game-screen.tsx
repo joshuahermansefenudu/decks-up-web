@@ -263,6 +263,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   })
   const offerAttemptAtRef = React.useRef<Map<string, number>>(new Map())
   const readySentAtRef = React.useRef<Map<string, number>>(new Map())
+  const previousPreferredTransportRef = React.useRef<PeerTransportMode | null>(
+    null
+  )
   const lastSignalDebugUpdateRef = React.useRef(0)
   const signalStatusRef = React.useRef(signalStatus)
   const subscribedReadyAtRef = React.useRef(0)
@@ -287,8 +290,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [turnConfigError, setTurnConfigError] = React.useState("")
   const hasTurnServer = turnServers.length > 0
   const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === "true"
+  const [requestedTransport, setRequestedTransport] =
+    React.useState<PeerTransportMode>(forceTurn ? "relay" : "p2p")
   const preferredTransport: PeerTransportMode =
-    forceTurn && hasTurnServer ? "relay" : "p2p"
+    requestedTransport === "relay" && hasTurnServer ? "relay" : "p2p"
   const isVirtual = state.lobby.mode === "VIRTUAL"
   const isActive = state.lobby.activePlayerId === playerId
   const showNetworkDebug =
@@ -359,6 +364,37 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     },
     [updateSignalDebug]
   )
+
+  const handleTransportToggle = React.useCallback(() => {
+    if (requestedTransport === "p2p") {
+      if (!turnConfigLoaded) {
+        setWebrtcFailure(
+          "TURN setup is still loading.",
+          "VFD_TURN_SETUP_LOADING"
+        )
+        return
+      }
+      if (!hasTurnServer) {
+        setWebrtcFailure(
+          "TURN is unavailable. Check /api/webrtc/ice.",
+          "VFD_TURN_UNAVAILABLE",
+          undefined,
+          turnConfigError || "no_ice_servers"
+        )
+        return
+      }
+      setRequestedTransport("relay")
+      return
+    }
+
+    setRequestedTransport("p2p")
+  }, [
+    hasTurnServer,
+    requestedTransport,
+    setWebrtcFailure,
+    turnConfigError,
+    turnConfigLoaded,
+  ])
 
   React.useEffect(() => {
     if (!isVirtual) {
@@ -964,7 +1000,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     if (!isVirtual || !playerId || !localStream) {
       return
     }
-    if (forceTurn && !turnConfigLoaded) {
+    if (requestedTransport === "relay" && !turnConfigLoaded) {
       return
     }
     if (typeof RTCPeerConnection === "undefined") {
@@ -1114,7 +1150,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     localStream,
     playerId,
     preferredTransport,
-    forceTurn,
+    requestedTransport,
     turnConfigLoaded,
     sendOfferForPeer,
     sendSignal,
@@ -1125,7 +1161,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     if (!isVirtual || !playerId || !localStream) {
       return
     }
-    if (forceTurn && !turnConfigLoaded) {
+    if (requestedTransport === "relay" && !turnConfigLoaded) {
       return
     }
 
@@ -1197,7 +1233,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     localStream,
     playerId,
     preferredTransport,
-    forceTurn,
+    requestedTransport,
     turnConfigLoaded,
     sendOfferForPeer,
     sendSignal,
@@ -1205,20 +1241,44 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   ])
 
   React.useEffect(() => {
-    if (!isVirtual || !forceTurn || !turnConfigLoaded || hasTurnServer) {
+    if (!isVirtual || !playerId || !localStream) {
+      return
+    }
+
+    if (previousPreferredTransportRef.current === null) {
+      previousPreferredTransportRef.current = preferredTransport
+      return
+    }
+
+    if (previousPreferredTransportRef.current === preferredTransport) {
+      return
+    }
+
+    previousPreferredTransportRef.current = preferredTransport
+    setWebrtcStatus(
+      preferredTransport === "relay"
+        ? "TURN relay enabled. Reconnecting video..."
+        : "P2P mode enabled. Reconnecting video..."
+    )
+    setVideoErrorCode("")
+    peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
+  }, [cleanupPeer, isVirtual, localStream, playerId, preferredTransport])
+
+  React.useEffect(() => {
+    if (!isVirtual || requestedTransport !== "relay" || !turnConfigLoaded || hasTurnServer) {
       return
     }
 
     setWebrtcFailure(
-      "TURN is forced but no ICE servers were returned by /api/webrtc/ice.",
+      "TURN mode is selected but no ICE servers were returned by /api/webrtc/ice.",
       "VFD_FORCE_TURN_NO_CONFIG",
       undefined,
       turnConfigError || "check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN"
     )
   }, [
-    forceTurn,
     hasTurnServer,
     isVirtual,
+    requestedTransport,
     setWebrtcFailure,
     turnConfigError,
     turnConfigLoaded,
@@ -1572,6 +1632,41 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           >
             {isVideoMuted ? "Turn Camera On" : "Turn Camera Off"}
           </button>
+          <div className="flex items-center gap-2 rounded-full border-2 border-black bg-offwhite px-3 py-1 shadow-[2px_2px_0_#000]">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-black">
+              Turn
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={preferredTransport === "relay"}
+              aria-label="Toggle TURN relay"
+              onClick={handleTransportToggle}
+              className={`relative h-7 w-14 rounded-full border-2 border-black transition-colors ${
+                preferredTransport === "relay" ? "bg-primary" : "bg-lightgray"
+              }`}
+            >
+              <span
+                className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-black transition-transform ${
+                  preferredTransport === "relay"
+                    ? "translate-x-7 bg-offwhite"
+                    : "translate-x-0.5 bg-offwhite"
+                }`}
+              />
+            </button>
+            <span className="min-w-8 text-[10px] font-bold uppercase tracking-wide text-black">
+              {preferredTransport === "relay" ? "On" : "Off"}
+            </span>
+          </div>
+        </div>
+        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
+          Connection mode:{" "}
+          {preferredTransport === "relay" ? "TURN relay" : "P2P"}
+          {!turnConfigLoaded
+            ? " (loading TURN setup...)"
+            : requestedTransport === "relay" && !hasTurnServer
+              ? " (TURN unavailable)"
+              : ""}
         </div>
 
         {mediaError ? (
