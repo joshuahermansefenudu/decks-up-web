@@ -1,6 +1,7 @@
 import Link from "next/link"
 
 import { PageContainer } from "@/components/layout/page-container"
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { Stack } from "@/components/layout/stack"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -23,7 +24,10 @@ export default function HomePage() {
     <PageContainer>
       <Stack className="gap-6">
         <header className="space-y-3">
-          <Badge className="w-fit">Charades party game</Badge>
+          <div className="flex items-start justify-between gap-3">
+            <Badge className="w-fit">Charades party game</Badge>
+            <HomeAccountEntry />
+          </div>
           <h1 className="font-display text-4xl uppercase tracking-wide sm:text-5xl">
             Decks Up!
           </h1>
@@ -32,46 +36,56 @@ export default function HomePage() {
           </p>
         </header>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Start a round</CardTitle>
-            <CardDescription>
-              Create a new game or jump into one with a code.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3">
-            <PrimaryButton asChild>
-              <Link href="/play-access?next=create">Create Game</Link>
-            </PrimaryButton>
-            <SecondaryButton asChild>
-              <Link href="/play-access?next=join">Join Game</Link>
-            </SecondaryButton>
-          </CardContent>
-        </Card>
+        <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+          <Stack className="gap-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Start a round</CardTitle>
+                <CardDescription>
+                  Create a new game or jump into one with a code.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <PrimaryButton asChild>
+                  <Link href="/play-access?next=create">Create Game</Link>
+                </PrimaryButton>
+                <SecondaryButton asChild>
+                  <Link href="/play-access?next=join">Join Game</Link>
+                </SecondaryButton>
+                <Link
+                  href="/pricing"
+                  className="mt-1 text-center text-xs font-semibold uppercase tracking-wide text-black/70 underline decoration-2 underline-offset-4"
+                >
+                  View Pricing
+                </Link>
+              </CardContent>
+            </Card>
 
-        <AdSlot slot="HOME_BANNER" className="mt-8 mb-4 flex justify-center" />
+            <div className="sticker-card p-4 text-sm text-black/70">
+              Gather 2+ friends on phones, upload up to five photos, and get ready
+              to play.
+            </div>
+          </Stack>
 
-        <div className="sticker-card p-4 text-sm text-black/70">
-          Gather 2+ friends on phones, upload up to five photos, and get ready to
-          play.
+          <Card>
+            <CardHeader>
+              <CardTitle>How to play</CardTitle>
+              <CardDescription>Quick visual overview of the rules.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-hidden rounded-2xl border-2 border-black bg-offwhite shadow-[4px_4px_0_#000]">
+                <img
+                  src="/how-to-play.png"
+                  alt="How to play Decks Up"
+                  className="h-auto w-full object-contain"
+                  loading="lazy"
+                />
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>How to play</CardTitle>
-            <CardDescription>Quick visual overview of the rules.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-hidden rounded-2xl border-2 border-black bg-offwhite shadow-[4px_4px_0_#000]">
-              <img
-                src="/how-to-play.png"
-                alt="How to play Decks Up"
-                className="h-auto w-full object-contain"
-                loading="lazy"
-              />
-            </div>
-          </CardContent>
-        </Card>
+        <AdSlot slot="HOME_BANNER" className="mt-2 mb-2 flex justify-center" />
 
         <div className="flex justify-center">
           <a

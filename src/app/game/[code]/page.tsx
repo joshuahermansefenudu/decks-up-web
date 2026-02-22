@@ -20,6 +20,7 @@ type GameResponse = {
     id: string
     name: string
     isHost: boolean
+    planType: "FREE" | "CORE" | "PRO"
   }>
   photos: {
     currentCard: {

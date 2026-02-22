@@ -69,7 +69,7 @@ export default function RootLayout({
         ) : null}
         <div className="flex min-h-screen flex-col">
           <div className="flex-1">{children}</div>
-          <div className="mx-auto w-full max-w-md px-4 pb-4 text-center text-xs text-black/50">
+          <div className="mx-auto w-full max-w-md px-4 pb-4 text-center text-xs text-black/50 sm:max-w-xl sm:px-6 lg:max-w-4xl lg:px-8">
             By playing DecksUp!, you agree to our{" "}
             <Link href="/terms" className="underline">
               Terms
@@ -80,8 +80,11 @@ export default function RootLayout({
             </Link>
             . Ads help keep the game free.
           </div>
-          <footer className="mx-auto w-full max-w-md px-4 pb-8 text-xs text-black/70">
+          <footer className="mx-auto w-full max-w-md px-4 pb-8 text-xs text-black/70 sm:max-w-xl sm:px-6 lg:max-w-4xl lg:px-8">
             <div className="flex items-center gap-4">
+              <Link href="/pricing" className="underline">
+                Pricing
+              </Link>
               <Link href="/privacy" className="underline">
                 Privacy
               </Link>

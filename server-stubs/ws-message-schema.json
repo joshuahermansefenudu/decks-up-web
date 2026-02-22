@@ -1,0 +1,53 @@
+{
+  "metadata": {
+    "product": "DecksUp",
+    "generatedAt": "2026-02-19",
+    "region": "America/Toronto"
+  },
+  "messages": [
+    {
+      "type": "RELAY_REQUEST",
+      "payload": {
+        "requestId": "string",
+        "roomId": "string",
+        "requesterId": "string",
+        "timestampMs": "number"
+      }
+    },
+    {
+      "type": "RELAY_DECISION",
+      "payload": {
+        "requestId": "string",
+        "roomId": "string",
+        "requesterId": "string",
+        "approved": "boolean",
+        "maxMinutesGranted": "number",
+        "note": "string",
+        "decidedBy": "string",
+        "timestampMs": "number"
+      }
+    },
+    {
+      "type": "QUALITY_POLICY_UPDATED",
+      "payload": {
+        "roomId": "string",
+        "participantCount": "number",
+        "allowedLayers": ["LOW", "MEDIUM", "HIGH"],
+        "recommendedMaxLayer": "LOW|MEDIUM|HIGH"
+      }
+    },
+    {
+      "type": "SUBSCRIPTION_QUALITY_HINTS",
+      "payload": {
+        "roomId": "string",
+        "participantId": "string",
+        "maxLayer": "LOW|MEDIUM|HIGH",
+        "preferredDimensions": {
+          "width": "number",
+          "height": "number"
+        }
+      }
+    }
+  ]
+}
+

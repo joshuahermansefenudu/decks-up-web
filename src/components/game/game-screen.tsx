@@ -5,12 +5,26 @@ import { useRouter } from "next/navigation"
 
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { PlanBadge } from "@/components/ui/plan-badge"
 import AdSlot from "@/components/ads/AdSlot"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 import { useKeepScreenAwake } from "@/lib/useKeepScreenAwake"
 import { useTurnTimer } from "@/hooks/useTurnTimer"
 import { useHeadAnchor } from "@/lib/virtual/useHeadAnchor"
 import { TurnOverlayCard } from "@/components/virtual/TurnOverlayCard"
+import {
+  RelayStatusPanel,
+  type RelayRoomState,
+  type RelayViewerState,
+} from "@/components/game/relay-status-panel"
+import { RelayRequestModal } from "@/components/game/relay-request-modal"
+import {
+  createSFUConnection,
+  detectRelayUsage as detectSfuRelayUsage,
+  enableRelayForParticipant,
+  hostApproveRelay,
+  type SfuConnection,
+} from "@/lib/sfu"
 
 const FEEDBACK_FORM_URL =
   process.env.NEXT_PUBLIC_FEEDBACK_FORM_URL?.trim() ||
@@ -20,6 +34,7 @@ type Player = {
   id: string
   name: string
   isHost: boolean
+  planType: "FREE" | "CORE" | "PRO"
 }
 
 type Card = {
@@ -49,6 +64,11 @@ type GameScreenProps = {
   playerId?: string
 }
 
+type RelayStateResponse = {
+  room: RelayRoomState
+  viewer: RelayViewerState
+}
+
 type PeerTransportMode = "p2p" | "relay"
 type VideoProfileType = "p2p" | "relay"
 
@@ -69,6 +89,7 @@ type VideoTileProps = {
   isSelf: boolean
   showPlaceholder: boolean
   card: Card | null
+  planType: Player["planType"]
 }
 
 function normalizeIceServers(input: unknown): RTCIceServer[] {
@@ -111,6 +132,18 @@ function normalizeIceServers(input: unknown): RTCIceServer[] {
   return servers
 }
 
+function getSfuWebSocketUrl(): string | null {
+  const configured = process.env.NEXT_PUBLIC_SFU_WS_URL?.trim()
+  if (configured) {
+    return configured
+  }
+  if (typeof window === "undefined") {
+    return null
+  }
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+  return `${protocol}//${window.location.host}/api/signaling/ws`
+}
+
 function VideoTile({
   stream,
   name,
@@ -118,6 +151,7 @@ function VideoTile({
   isSelf,
   showPlaceholder,
   card,
+  planType,
 }: VideoTileProps) {
   const videoRef = React.useRef<HTMLVideoElement | null>(null)
   const [needsManualPlay, setNeedsManualPlay] = React.useState(false)
@@ -213,6 +247,9 @@ function VideoTile({
         {name}
         {isSelf ? " (You)" : ""}
       </div>
+      <div className="absolute bottom-2 right-2">
+        <PlanBadge planType={planType} className="px-2 py-0 text-[9px]" />
+      </div>
 
       {isActive ? (
         <div className="absolute top-2 left-2 rounded-full border-2 border-black bg-primary px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]">
@@ -246,6 +283,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [remoteStreams, setRemoteStreams] = React.useState<
     Record<string, MediaStream>
   >({})
+  const [relayState, setRelayState] = React.useState<RelayStateResponse | null>(
+    null
+  )
+  const [relayStateError, setRelayStateError] = React.useState("")
+  const [isRelayDecisionSubmitting, setIsRelayDecisionSubmitting] =
+    React.useState(false)
+  const [isRelayRequestSubmitting, setIsRelayRequestSubmitting] =
+    React.useState(false)
   const [mediaError, setMediaError] = React.useState("")
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
   const [videoErrorCode, setVideoErrorCode] = React.useState("")
@@ -255,6 +300,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const [isMicMuted, setIsMicMuted] = React.useState(false)
   const [isVideoMuted, setIsVideoMuted] = React.useState(false)
   const [isRelayUsageActive, setIsRelayUsageActive] = React.useState(false)
+  const [sfuUnavailable, setSfuUnavailable] = React.useState(false)
   const isAdvancingRef = React.useRef(false)
   const peersRef = React.useRef<Map<string, RTCPeerConnection>>(new Map())
   const remoteMediaRef = React.useRef<Map<string, MediaStream>>(new Map())
@@ -285,12 +331,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const pendingIceRef = React.useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
   )
-  const connectTimeoutsRef = React.useRef<
-    Map<string, ReturnType<typeof setTimeout>>
-  >(new Map())
+  const connectTimeoutsRef = React.useRef<Map<string, number>>(new Map())
   const channelRef = React.useRef<ReturnType<
     typeof supabaseBrowser.channel
   > | null>(null)
+  const sfuConnectionRef = React.useRef<SfuConnection | null>(null)
+  const sfuSocketRef = React.useRef<WebSocket | null>(null)
+  const sfuRelayWatcherStopRef = React.useRef<(() => void) | null>(null)
+  const streamPlayerMapRef = React.useRef<Map<string, string>>(new Map())
+  const relayRequestSentRef = React.useRef(false)
+  const relayTickTimerRef = React.useRef<number | null>(null)
   const p2pIceServers = React.useMemo<RTCIceServer[]>(
     () => [
       { urls: "stun:stun.l.google.com:19302" },
@@ -307,12 +357,29 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     React.useState<boolean>(false)
   const [requestedTransport, setRequestedTransport] =
     React.useState<PeerTransportMode>("p2p")
-  const preferredTransport: PeerTransportMode =
-    requestedTransport === "relay" && hasTurnServer ? "relay" : "p2p"
-  const isTurnSwitchDisabled =
-    requestedTransport === "p2p" && !turnToggleUnlocked
   const isVirtual = state.lobby.mode === "VIRTUAL"
+  const isSfuMode =
+    isVirtual && process.env.NEXT_PUBLIC_ENABLE_SFU === "true" && !sfuUnavailable
+  const preferredTransport: PeerTransportMode = isSfuMode
+    ? requestedTransport
+    : requestedTransport === "relay" && hasTurnServer
+      ? "relay"
+      : "p2p"
+  const pendingRelayRequest = relayState?.room.pendingRequest ?? null
+  const relayViewer = relayState?.viewer ?? null
+  const relayRoom = relayState?.room ?? null
+  const relayActionsAvailable =
+    preferredTransport === "relay" ||
+    Boolean(relayViewer?.canEnableRelay || relayViewer?.canRequestRelay)
+  const isTurnSwitchDisabled =
+    isSfuMode
+      ? !turnToggleUnlocked || !relayActionsAvailable
+      : (requestedTransport === "p2p" && !turnToggleUnlocked) ||
+        !relayActionsAvailable
   const isActive = state.lobby.activePlayerId === playerId
+  const hostPlayerId =
+    state.players.find((participant) => participant.isHost)?.id ?? ""
+  const isHostPlayer = Boolean(playerId && playerId === hostPlayerId)
   const showNetworkDebug =
     process.env.NODE_ENV === "development" ||
     process.env.NEXT_PUBLIC_SHOW_NETWORK_DEBUG === "true"
@@ -320,6 +387,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   React.useEffect(() => {
     signalStatusRef.current = signalStatus
   }, [signalStatus])
+
+  React.useEffect(() => {
+    if (!isVirtual) {
+      setSfuUnavailable(false)
+    }
+  }, [isVirtual])
 
   const updateSignalDebug = React.useCallback((force?: boolean) => {
     const now = Date.now()
@@ -349,6 +422,152 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       updateSignalDebug()
     },
     [updateSignalDebug]
+  )
+
+  const setRelayFailure = React.useCallback(
+    (message: string, code: string) => {
+      setWebrtcStatus(message)
+      setVideoErrorCode(`VIDEO_FEED_ERROR_CODE=${code}`)
+    },
+    []
+  )
+
+  const fetchRelayState = React.useCallback(async () => {
+    if (!isVirtual || !playerId || state.lobby.status !== "IN_GAME") {
+      setRelayState(null)
+      return
+    }
+
+    try {
+      const response = await fetch(
+        `/api/relay/state?lobbyCode=${encodeURIComponent(
+          state.lobby.code
+        )}&playerId=${encodeURIComponent(playerId)}`,
+        { cache: "no-store" }
+      )
+      const payload = (await response.json().catch(() => ({}))) as
+        | RelayStateResponse
+        | { error?: string }
+
+      if (!response.ok) {
+        setRelayStateError(
+          (payload as { error?: string })?.error ?? "Unable to load relay state."
+        )
+        return
+      }
+
+      setRelayState(payload as RelayStateResponse)
+      setRelayStateError("")
+    } catch {
+      setRelayStateError("Unable to load relay state.")
+    }
+  }, [isVirtual, playerId, state.lobby.code, state.lobby.status])
+
+  const requestRelayAccess = React.useCallback(async () => {
+    if (!playerId) {
+      return
+    }
+
+    setIsRelayRequestSubmitting(true)
+    try {
+      const response = await fetch("/api/relay/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lobbyCode: state.lobby.code,
+          requesterPlayerId: playerId,
+        }),
+      })
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string
+        requestId?: string
+      }
+      if (!response.ok) {
+        relayRequestSentRef.current = false
+        setRelayFailure(
+          payload.error ?? "Unable to request relay access.",
+          "VFD_RELAY_REQUEST_FAILED"
+        )
+        return
+      }
+
+      setWebrtcStatus("Relay request sent. Waiting for host decision...")
+      relayRequestSentRef.current = true
+      if (isSfuMode && payload.requestId) {
+        void enableRelayForParticipant(playerId, payload.requestId).catch(() => {
+          // Keep polling relay state even if signaling helper fails.
+        })
+      }
+      await fetchRelayState()
+    } catch {
+      relayRequestSentRef.current = false
+      setRelayFailure(
+        "Unable to request relay access.",
+        "VFD_RELAY_REQUEST_FAILED"
+      )
+    } finally {
+      setIsRelayRequestSubmitting(false)
+    }
+  }, [fetchRelayState, isSfuMode, playerId, setRelayFailure, state.lobby.code])
+
+  const submitRelayDecision = React.useCallback(
+    async (approved: boolean) => {
+      if (!pendingRelayRequest || !playerId) {
+        return
+      }
+
+      setIsRelayDecisionSubmitting(true)
+      try {
+        const response = await fetch("/api/relay/decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId: pendingRelayRequest.requestId,
+            hostPlayerId: playerId,
+            approved,
+            maxMinutesGranted: approved ? 30 : 0,
+          }),
+        })
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string
+        }
+        if (!response.ok) {
+          setRelayFailure(
+            payload.error ?? "Unable to process relay decision.",
+            "VFD_RELAY_DECISION_FAILED"
+          )
+          return
+        }
+
+        if (isSfuMode) {
+          hostApproveRelay(
+            pendingRelayRequest.requestId,
+            approved,
+            approved ? 30 : 0
+          )
+        }
+
+        setWebrtcStatus(
+          approved ? "Relay request approved." : "Relay request denied."
+        )
+        relayRequestSentRef.current = false
+        await fetchRelayState()
+      } catch {
+        setRelayFailure(
+          "Unable to process relay decision.",
+          "VFD_RELAY_DECISION_FAILED"
+        )
+      } finally {
+        setIsRelayDecisionSubmitting(false)
+      }
+    },
+    [
+      fetchRelayState,
+      isSfuMode,
+      pendingRelayRequest,
+      playerId,
+      setRelayFailure,
+    ]
   )
 
   const applySenderVideoProfile = React.useCallback(
@@ -477,6 +696,195 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     [updateSignalDebug]
   )
 
+  React.useEffect(() => {
+    if (!isVirtual || !playerId || state.lobby.status !== "IN_GAME") {
+      setRelayState(null)
+      setRelayStateError("")
+      return
+    }
+
+    let cancelled = false
+    const syncRelayState = async () => {
+      await fetchRelayState()
+      if (cancelled) {
+        return
+      }
+    }
+
+    void syncRelayState()
+    const intervalId = window.setInterval(() => {
+      void syncRelayState()
+    }, 5000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [fetchRelayState, isVirtual, playerId, state.lobby.status])
+
+  React.useEffect(() => {
+    if (!playerId || !relayRoom) {
+      return
+    }
+
+    if (
+      relayRoom.activeRequesterPlayerId === playerId &&
+      relayRoom.relayStatus !== "DENIED" &&
+      relayRoom.relayStatus !== "ENDED" &&
+      requestedTransport !== "relay"
+    ) {
+      setRequestedTransport("relay")
+      setTurnToggleUnlocked(true)
+      setWebrtcStatus("Relay approved. Reconnecting with TURN...")
+      relayRequestSentRef.current = false
+      return
+    }
+
+    if (
+      relayRoom.relayDisabledReason === "no_credits" &&
+      requestedTransport === "relay"
+    ) {
+      setRequestedTransport("p2p")
+      setIsVideoMuted(true)
+      setWebrtcStatus("Relay disabled - no credits. Camera moved to audio-only.")
+    }
+  }, [playerId, relayRoom, requestedTransport])
+
+  React.useEffect(() => {
+    if (relayTickTimerRef.current) {
+      window.clearInterval(relayTickTimerRef.current)
+      relayTickTimerRef.current = null
+    }
+
+    const shouldTick =
+      Boolean(playerId) &&
+      isVirtual &&
+      preferredTransport === "relay" &&
+      isRelayUsageActive &&
+      relayRoom?.activeRequesterPlayerId === playerId
+
+    if (!shouldTick || !playerId) {
+      return
+    }
+
+    const tickRelay = async () => {
+      try {
+        const response = await fetch("/api/relay/tick", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lobbyCode: state.lobby.code,
+            playerId,
+            activeVideoParticipants: Math.min(
+              state.players.length,
+              relayRoom?.maxRelayParticipants ?? 6
+            ),
+          }),
+        })
+        const payload = (await response.json().catch(() => ({}))) as {
+          relayEnabled?: boolean
+          error?: string
+          remainingHostHours?: number
+        }
+        if (!response.ok) {
+          setRelayFailure(
+            payload.error ?? "Relay deduction tick failed.",
+            "VFD_RELAY_TICK_FAILED"
+          )
+          return
+        }
+
+        if (payload.relayEnabled === false) {
+          setRequestedTransport("p2p")
+          setIsVideoMuted(true)
+          setWebrtcStatus("Relay hours depleted. Video switched to audio-only.")
+        }
+        await fetchRelayState()
+      } catch {
+        setRelayFailure("Relay deduction tick failed.", "VFD_RELAY_TICK_FAILED")
+      }
+    }
+
+    void tickRelay()
+    relayTickTimerRef.current = window.setInterval(() => {
+      void tickRelay()
+    }, 60_000)
+
+    return () => {
+      if (relayTickTimerRef.current) {
+        window.clearInterval(relayTickTimerRef.current)
+        relayTickTimerRef.current = null
+      }
+    }
+  }, [
+    fetchRelayState,
+    isRelayUsageActive,
+    isVirtual,
+    playerId,
+    preferredTransport,
+    relayRoom?.activeRequesterPlayerId,
+    relayRoom?.maxRelayParticipants,
+    state.lobby.code,
+    state.players.length,
+    setRelayFailure,
+  ])
+
+  const assignSfuRemoteStream = React.useCallback(
+    (stream: MediaStream) => {
+      if (!playerId) {
+        return
+      }
+
+      const participants = state.players.filter((player) => player.id !== playerId)
+      if (!participants.length) {
+        return
+      }
+
+      const existingPlayerId = streamPlayerMapRef.current.get(stream.id)
+      let targetPlayerId = existingPlayerId
+
+      if (!targetPlayerId || !participants.some((player) => player.id === targetPlayerId)) {
+        const alreadyMapped = new Set(streamPlayerMapRef.current.values())
+        const available = participants.find(
+          (player) => !alreadyMapped.has(player.id)
+        )
+        targetPlayerId = available?.id ?? participants[0]?.id
+      }
+
+      if (!targetPlayerId) {
+        return
+      }
+
+      streamPlayerMapRef.current.set(stream.id, targetPlayerId)
+      setRemoteStreams((current) => {
+        if (current[targetPlayerId] === stream) {
+          return current
+        }
+        return { ...current, [targetPlayerId]: stream }
+      })
+    },
+    [playerId, state.players]
+  )
+
+  const cleanupSfuConnection = React.useCallback(() => {
+    sfuRelayWatcherStopRef.current?.()
+    sfuRelayWatcherStopRef.current = null
+
+    if (sfuConnectionRef.current) {
+      sfuConnectionRef.current.pc.ontrack = null
+      sfuConnectionRef.current.pc.onicecandidate = null
+      sfuConnectionRef.current.pc.onconnectionstatechange = null
+      sfuConnectionRef.current.pc.oniceconnectionstatechange = null
+      sfuConnectionRef.current.pc.close()
+      sfuConnectionRef.current = null
+    }
+
+    if (sfuSocketRef.current) {
+      sfuSocketRef.current.close()
+      sfuSocketRef.current = null
+    }
+  }, [])
+
   const enableTurnMode = React.useCallback(() => {
     if (!turnConfigLoaded) {
       setWebrtcFailure("TURN setup is still loading.", "VFD_TURN_SETUP_LOADING")
@@ -495,16 +903,51 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [hasTurnServer, setWebrtcFailure, turnConfigError, turnConfigLoaded])
 
   const handleTransportToggle = React.useCallback(() => {
+    if (isSfuMode) {
+      if (!playerId || !turnToggleUnlocked || relayRequestSentRef.current) {
+        return
+      }
+
+      if (requestedTransport === "relay") {
+        setRequestedTransport("p2p")
+        setWebrtcStatus("Relay turned off.")
+        return
+      }
+
+      if (relayViewer?.canEnableRelay) {
+        setRequestedTransport("relay")
+        setWebrtcStatus("Enabling relay...")
+        return
+      }
+
+      if (relayViewer?.canRequestRelay) {
+        relayRequestSentRef.current = true
+        void requestRelayAccess()
+      } else {
+        setWebrtcStatus("Relay is unavailable for this account.")
+      }
+      return
+    }
+
     if (requestedTransport === "p2p") {
       enableTurnMode()
       return
     }
 
     setRequestedTransport("p2p")
-  }, [enableTurnMode, requestedTransport])
+  }, [
+    enableTurnMode,
+    isSfuMode,
+    playerId,
+    relayViewer?.canEnableRelay,
+    relayViewer?.canRequestRelay,
+    requestRelayAccess,
+    requestedTransport,
+    turnToggleUnlocked,
+  ])
 
   React.useEffect(() => {
-    if (!isVirtual) {
+    if (!isVirtual || isSfuMode) {
       setTurnServers([])
       setTurnConfigLoaded(false)
       setTurnConfigError("")
@@ -552,7 +995,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     return () => {
       cancelled = true
     }
-  }, [isVirtual])
+  }, [isSfuMode, isVirtual])
 
   const fetchState = React.useCallback(async () => {
     const response = await fetch(
@@ -633,7 +1076,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
     const timeoutId = connectTimeoutsRef.current.get(peerId)
     if (timeoutId) {
-      clearTimeout(timeoutId)
+      window.clearTimeout(timeoutId)
       connectTimeoutsRef.current.delete(peerId)
     }
 
@@ -661,11 +1104,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     (peerId: string, mode: PeerTransportMode) => {
       const existing = connectTimeoutsRef.current.get(peerId)
       if (existing) {
-        clearTimeout(existing)
+        window.clearTimeout(existing)
       }
 
       const timeoutMs = mode === "p2p" ? 9000 : 30000
-      const timeoutId = setTimeout(() => {
+      const timeoutId = window.setTimeout(() => {
         const peer = peersRef.current.get(peerId)
         if (!peer) {
           return
@@ -867,7 +1310,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         const timeoutId = connectTimeoutsRef.current.get(peerId)
         if (timeoutId) {
-          clearTimeout(timeoutId)
+          window.clearTimeout(timeoutId)
           connectTimeoutsRef.current.delete(peerId)
         }
 
@@ -917,7 +1360,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           }
           const timeoutId = connectTimeoutsRef.current.get(peerId)
           if (timeoutId) {
-            clearTimeout(timeoutId)
+            window.clearTimeout(timeoutId)
             connectTimeoutsRef.current.delete(peerId)
           }
           return
@@ -968,7 +1411,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           }
           const timeoutId = connectTimeoutsRef.current.get(peerId)
           if (timeoutId) {
-            clearTimeout(timeoutId)
+            window.clearTimeout(timeoutId)
             connectTimeoutsRef.current.delete(peerId)
           }
         }
@@ -1125,7 +1568,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [updateRelayBillingState])
 
   React.useEffect(() => {
-    if (!isVirtual) {
+    if (!isVirtual || isSfuMode) {
       updateRelayBillingState(false)
       return
     }
@@ -1148,7 +1591,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       window.clearInterval(intervalId)
       updateRelayBillingState(false)
     }
-  }, [detectRelayUsage, isVirtual, updateRelayBillingState])
+  }, [detectRelayUsage, isSfuMode, isVirtual, updateRelayBillingState])
   // Tweak duration/urgent thresholds here.
   // Timer checklist: starts on card, urgent at 10s, expires once, manual Next cancels, resets on turn change.
   const turnTimer = useTurnTimer({
@@ -1172,14 +1615,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [isMicMuted, isVideoMuted, localStream])
 
   React.useEffect(() => {
-    if (!isVirtual || !localStream) {
+    if (!isVirtual || !localStream || isSfuMode) {
       return
     }
 
     const profileType: VideoProfileType =
       preferredTransport === "relay" ? "relay" : "p2p"
     void applyVideoProfile(profileType)
-  }, [applyVideoProfile, isVirtual, localStream, preferredTransport])
+  }, [applyVideoProfile, isSfuMode, isVirtual, localStream, preferredTransport])
 
   React.useEffect(() => {
     if (!isVirtual || !playerId) {
@@ -1232,7 +1675,178 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [isVirtual, playerId])
 
   React.useEffect(() => {
-    if (!isVirtual || !playerId || !localStream) {
+    if (!isVirtual || !playerId || !localStream || !isSfuMode) {
+      if (!isSfuMode) {
+        cleanupSfuConnection()
+        relayRequestSentRef.current = false
+      }
+      return
+    }
+
+    let cancelled = false
+    let timeoutId: number | null = null
+
+    const socketUrl = getSfuWebSocketUrl()
+    if (!socketUrl) {
+      setWebrtcFailure(
+        "SFU signaling URL is missing. Falling back to direct mode.",
+        "VFD_SFU_URL_MISSING"
+      )
+      setSfuUnavailable(true)
+      return
+    }
+
+    cleanupSfuConnection()
+    streamPlayerMapRef.current.clear()
+
+    const socket = new WebSocket(socketUrl)
+    sfuSocketRef.current = socket
+    setSignalStatus("connecting")
+
+    const handleFallback = (status: string, code: string, detail?: string) => {
+      if (cancelled) {
+        return
+      }
+      cancelled = true
+      setWebrtcFailure(status, code, undefined, detail)
+      setRequestedTransport("p2p")
+      setTurnToggleUnlocked(false)
+      relayRequestSentRef.current = false
+      setSfuUnavailable(true)
+      cleanupSfuConnection()
+    }
+
+    socket.addEventListener("open", () => {
+      if (cancelled) {
+        return
+      }
+
+      setSignalStatus("SUBSCRIBED")
+
+      void (async () => {
+        const { data } = await supabaseBrowser.auth.getSession().catch(() => ({
+          data: { session: null },
+        }))
+        const authToken = data.session?.access_token ?? `guest-${playerId}`
+
+        try {
+          const hostId =
+            state.players.find((participant) => participant.isHost)?.id ?? playerId
+          const connection = await createSFUConnection({
+            roomId: state.lobby.code,
+            participantId: playerId,
+            hostId,
+            authToken,
+            signalingSocket: socket,
+            localStream,
+            onRemoteTrack: (event) => {
+              const stream = event.streams[0] ?? null
+              if (!stream) {
+                return
+              }
+              assignSfuRemoteStream(stream)
+            },
+            onBanner: (message) => {
+              setWebrtcStatus(message)
+              if (message.toLowerCase().includes("request relay")) {
+                setTurnToggleUnlocked(true)
+                setRequestedTransport("p2p")
+                relayRequestSentRef.current = false
+              }
+              if (message.toLowerCase().includes("relay active")) {
+                setRequestedTransport("relay")
+                relayRequestSentRef.current = false
+              }
+              if (message.toLowerCase().includes("denied")) {
+                setRequestedTransport("p2p")
+                relayRequestSentRef.current = false
+              }
+            },
+          })
+
+          if (cancelled) {
+            connection.pc.close()
+            return
+          }
+
+          sfuConnectionRef.current = connection
+          const relayWatcher = detectSfuRelayUsage(connection, (selected) => {
+            const protocol =
+              selected.relayProtocol && selected.relayProtocol !== "unknown"
+                ? ` (${selected.relayProtocol})`
+                : ""
+            setIceStatus(`ICE candidates: ${selected.candidateType}${protocol}`)
+            updateRelayBillingState(selected.candidateType === "relay")
+          })
+          sfuRelayWatcherStopRef.current = relayWatcher.stop
+          setWebrtcStatus("SFU connected.")
+          setTurnToggleUnlocked(false)
+          setRequestedTransport("p2p")
+          setVideoErrorCode("")
+        } catch (error) {
+          handleFallback(
+            "SFU setup failed. Falling back to direct mode.",
+            "VFD_SFU_SETUP_FAILED",
+            String((error as Error | undefined)?.message ?? error)
+          )
+        }
+      })()
+    })
+
+    socket.addEventListener("close", () => {
+      if (cancelled) {
+        return
+      }
+      if (!sfuConnectionRef.current) {
+        handleFallback(
+          "SFU signaling closed. Falling back to direct mode.",
+          "VFD_SFU_SIGNAL_CLOSED"
+        )
+      } else {
+        setSignalStatus("closed")
+      }
+    })
+
+    socket.addEventListener("error", () => {
+      handleFallback(
+        "SFU signaling failed. Falling back to direct mode.",
+        "VFD_SFU_SIGNAL_ERROR"
+      )
+    })
+
+    timeoutId = window.setTimeout(() => {
+      if (!sfuConnectionRef.current) {
+        handleFallback(
+          "SFU connect timed out. Falling back to direct mode.",
+          "VFD_SFU_CONNECT_TIMEOUT"
+        )
+      }
+    }, 10_000)
+
+    return () => {
+      cancelled = true
+      if (timeoutId) {
+        window.clearTimeout(timeoutId)
+      }
+      cleanupSfuConnection()
+      updateRelayBillingState(false)
+      relayRequestSentRef.current = false
+    }
+  }, [
+    assignSfuRemoteStream,
+    cleanupSfuConnection,
+    isSfuMode,
+    isVirtual,
+    localStream,
+    playerId,
+    setWebrtcFailure,
+    state.lobby.id,
+    state.players,
+    updateRelayBillingState,
+  ])
+
+  React.useEffect(() => {
+    if (!isVirtual || !playerId || !localStream || isSfuMode) {
       return
     }
     if (requestedTransport === "relay" && !turnConfigLoaded) {
@@ -1390,6 +2004,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     cleanupPeer,
     createPeerConnection,
     hasTurnServer,
+    isSfuMode,
     isVirtual,
     localStream,
     playerId,
@@ -1402,7 +2017,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   ])
 
   React.useEffect(() => {
-    if (!isVirtual || !playerId || !localStream) {
+    if (!isVirtual || !playerId || !localStream || isSfuMode) {
       return
     }
     if (requestedTransport === "relay" && !turnConfigLoaded) {
@@ -1473,6 +2088,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       clearInterval(intervalId)
     }
   }, [
+    isSfuMode,
     isVirtual,
     localStream,
     playerId,
@@ -1485,7 +2101,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   ])
 
   React.useEffect(() => {
-    if (!isVirtual || !playerId || !localStream) {
+    if (!isVirtual || !playerId || !localStream || isSfuMode) {
       return
     }
 
@@ -1506,10 +2122,16 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     )
     setVideoErrorCode("")
     peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
-  }, [cleanupPeer, isVirtual, localStream, playerId, preferredTransport])
+  }, [cleanupPeer, isSfuMode, isVirtual, localStream, playerId, preferredTransport])
 
   React.useEffect(() => {
-    if (!isVirtual || requestedTransport !== "relay" || !turnConfigLoaded || hasTurnServer) {
+    if (
+      !isVirtual ||
+      isSfuMode ||
+      requestedTransport !== "relay" ||
+      !turnConfigLoaded ||
+      hasTurnServer
+    ) {
       return
     }
 
@@ -1521,6 +2143,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     )
   }, [
     hasTurnServer,
+    isSfuMode,
     isVirtual,
     requestedTransport,
     setWebrtcFailure,
@@ -1839,15 +2462,47 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
   if (isVirtual) {
     const controlsDisabled = !localStream || Boolean(mediaError)
+    const relayModalOpen =
+      isHostPlayer &&
+      Boolean(pendingRelayRequest) &&
+      pendingRelayRequest?.requesterPlayerId !== playerId
+    const showRequestRelayButton =
+      turnToggleUnlocked &&
+      !relayViewer?.canEnableRelay &&
+      Boolean(relayViewer?.canRequestRelay) &&
+      requestedTransport === "p2p"
+    const relayButtonLabel =
+      relayViewer?.canEnableRelay || requestedTransport === "relay"
+        ? isSfuMode
+          ? "Enable TURN fallback"
+          : "Enable TURN fallback"
+        : "Request host relay"
+
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-4 pb-10 pt-8">
+        <RelayRequestModal
+          open={relayModalOpen}
+          requesterName={pendingRelayRequest?.requesterName ?? "Player"}
+          estimatedBurnRatePerMinute={
+            pendingRelayRequest?.estimatedBurnRatePerMinute ?? 0
+          }
+          remainingHostHours={relayRoom?.remainingHostHours ?? 0}
+          isSubmitting={isRelayDecisionSubmitting}
+          onApprove={() => {
+            void submitRelayDecision(true)
+          }}
+          onDeny={() => {
+            void submitRelayDecision(false)
+          }}
+        />
+
         <header className="flex items-start justify-between gap-4">
           <div>
             <h1 className="font-display text-3xl uppercase tracking-wide">
               Game Time
             </h1>
             <p className="text-sm text-black/70">
-              Virtual (Video) · Code: {state.lobby.code}
+              Virtual (Video) - Code: {state.lobby.code}
             </p>
           </div>
           <SecondaryButton type="button" onClick={handleLeave}>
@@ -1882,13 +2537,13 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             }`}
           >
             <span className="text-[10px] font-semibold uppercase tracking-wide text-black">
-              Enable TURN fallback
+              {relayButtonLabel}
             </span>
             <button
               type="button"
               role="switch"
               aria-checked={preferredTransport === "relay"}
-              aria-label="Toggle TURN relay"
+              aria-label={isSfuMode ? "Request TURN relay" : "Toggle TURN relay"}
               disabled={isTurnSwitchDisabled}
               onClick={handleTransportToggle}
               className={`relative h-7 w-14 rounded-full border-2 border-black transition-colors ${
@@ -1896,7 +2551,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               } disabled:cursor-not-allowed disabled:opacity-60`}
               title={
                 isTurnSwitchDisabled
-                  ? "TURN unlocks after a P2P failure."
+                  ? isSfuMode
+                    ? "Relay request unlocks after direct mode fails."
+                    : "TURN unlocks after a P2P failure."
                   : undefined
               }
             >
@@ -1912,22 +2569,65 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               {preferredTransport === "relay" ? "On" : "Off"}
             </span>
           </div>
+          {showRequestRelayButton ? (
+            <PrimaryButton
+              type="button"
+              className="px-4 py-2 text-xs"
+              onClick={() => {
+                void requestRelayAccess()
+              }}
+              disabled={isRelayRequestSubmitting}
+            >
+              {isRelayRequestSubmitting ? "Requesting..." : "Request Relay Access"}
+            </PrimaryButton>
+          ) : null}
         </div>
+        <RelayStatusPanel
+          room={relayRoom}
+          viewer={relayViewer}
+          relayActive={isRelayUsageActive}
+          isTurnUnlocked={turnToggleUnlocked}
+        />
+        {relayViewer?.lowCreditWarning ? (
+          <div className="rounded-2xl border-2 border-black bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[3px_3px_0_#000]">
+            Low Relay Hours - Upgrade or Buy Credits
+          </div>
+        ) : null}
+        {relayViewer?.expiringSoonWarning ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/80 shadow-[3px_3px_0_#000]">
+            Banked relay hours expire in less than 7 days.
+          </div>
+        ) : null}
+        {relayStateError ? (
+          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-2 text-xs font-semibold text-black shadow-[3px_3px_0_#000]">
+            {relayStateError}
+          </div>
+        ) : null}
         <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
           Connection mode:{" "}
-          {preferredTransport === "relay" ? "TURN relay" : "P2P"}
-          {!turnConfigLoaded
-            ? " (loading TURN setup...)"
-            : requestedTransport === "relay" && !hasTurnServer
-              ? " (TURN unavailable)"
-              : ""}
+          {isSfuMode
+            ? preferredTransport === "relay"
+              ? "SFU relay"
+              : "SFU direct"
+            : preferredTransport === "relay"
+              ? "TURN relay"
+              : "P2P"}
+          {isSfuMode
+            ? ""
+            : !turnConfigLoaded
+              ? " (loading TURN setup...)"
+              : requestedTransport === "relay" && !hasTurnServer
+                ? " (TURN unavailable)"
+                : ""}
         </div>
         <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
           Relay usage: {isRelayUsageActive ? "active" : "inactive"}
         </div>
         {isTurnSwitchDisabled ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            TURN switch unlocks after P2P fails.
+            {isSfuMode
+              ? "Relay request unlocks after direct mode fails."
+              : "TURN switch unlocks after P2P fails."}
           </div>
         ) : null}
 
@@ -2027,6 +2727,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                     isSelf={isSelf}
                     showPlaceholder={showPlaceholder}
                     card={card}
+                    planType={player.planType}
                   />
                 </div>
               )

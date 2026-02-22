@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 
 import { expireLobbyIfNeeded } from "@/lib/lobby-expiration"
 import { prisma } from "@/lib/prisma"
+import { getPlayerPlanMap } from "@/lib/relay/server-relay-pricing"
 
 function normalizeCode(code: string) {
   return (code ?? "").replace(/\s+/g, "").toUpperCase()
@@ -29,6 +30,7 @@ export async function GET(request: Request, { params }: RouteContext) {
         orderBy: { createdAt: "asc" },
         select: {
           id: true,
+          authUserId: true,
           name: true,
           isHost: true,
           createdAt: true,
@@ -84,6 +86,16 @@ export async function GET(request: Request, { params }: RouteContext) {
       })
     : []
 
+  let planMap: Record<string, "FREE" | "CORE" | "PRO"> = {}
+  try {
+    planMap = await getPlayerPlanMap(
+      lobby.players.map((player) => player.authUserId ?? "")
+    )
+  } catch {
+    // Failsafe while relay tables are rolling out.
+    planMap = {}
+  }
+
   return NextResponse.json({
     lobby: {
       id: lobby.id,
@@ -103,6 +115,7 @@ export async function GET(request: Request, { params }: RouteContext) {
       isHost: player.isHost,
       createdAt: player.createdAt,
       photoCount: player._count.photos,
+      planType: player.authUserId ? planMap[player.authUserId] ?? "FREE" : "FREE",
     })),
     photos: {
       totalPhotos,

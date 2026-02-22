@@ -24,6 +24,18 @@ type AccountPhoto = {
   createdAt: string
 }
 
+type RelayProfile = {
+  planType: "FREE" | "CORE" | "PRO"
+  monthlyHours: number
+  bankedHours: number
+  totalAvailableHours: number
+  loyaltyActive: boolean
+  renewalPriceUsd: number
+  lowCreditWarning: boolean
+  expiringHoursWithin7Days: number
+  expiringInDays: number | null
+}
+
 export default function AccountPage() {
   const router = useRouter()
   const [session, setSession] = React.useState<Session | null>(null)
@@ -34,6 +46,10 @@ export default function AccountPage() {
   const [uploadingIds, setUploadingIds] = React.useState<string[]>([])
   const [deletingIds, setDeletingIds] = React.useState<string[]>([])
   const [nextPath, setNextPath] = React.useState<"" | "/join" | "/create">("")
+  const [relayProfile, setRelayProfile] = React.useState<RelayProfile | null>(
+    null
+  )
+  const [relayError, setRelayError] = React.useState("")
 
   const accessToken = session?.access_token ?? ""
   const nextLabel = nextPath === "/join" ? "Join Game" : "Create Game"
@@ -100,9 +116,40 @@ export default function AccountPage() {
     }
   }, [accessToken])
 
+  const fetchRelayProfile = React.useCallback(async () => {
+    if (!accessToken) {
+      setRelayProfile(null)
+      setRelayError("")
+      return
+    }
+
+    try {
+      const response = await fetch("/api/account/relay-profile", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setRelayError(payload?.error ?? "Unable to load relay profile.")
+        setRelayProfile(null)
+        return
+      }
+      setRelayProfile(payload?.profile ?? null)
+      setRelayError("")
+    } catch {
+      setRelayError("Unable to load relay profile.")
+      setRelayProfile(null)
+    }
+  }, [accessToken])
+
   React.useEffect(() => {
     void fetchPhotos()
   }, [fetchPhotos])
+
+  React.useEffect(() => {
+    void fetchRelayProfile()
+  }, [fetchRelayProfile])
 
   const handleSignOut = async () => {
     await supabaseBrowser.auth.signOut()
@@ -259,6 +306,53 @@ export default function AccountPage() {
                   Warning: deleting your account permanently removes your saved
                   pictures.
                 </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Relay hours</CardTitle>
+                <CardDescription>
+                  Plan and banked relay hours for virtual fallback.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm text-black/80">
+                {relayProfile ? (
+                  <>
+                    <p>
+                      Plan:{" "}
+                      <span className="font-semibold">{relayProfile.planType}</span>
+                    </p>
+                    <p>
+                      Total available:{" "}
+                      <span className="font-semibold">
+                        {relayProfile.totalAvailableHours.toFixed(2)}h
+                      </span>
+                    </p>
+                    <p>
+                      Banked hours:{" "}
+                      <span className="font-semibold">
+                        {relayProfile.bankedHours.toFixed(2)}h
+                      </span>
+                    </p>
+                    {relayProfile.lowCreditWarning ? (
+                      <p className="rounded-xl border-2 border-black bg-primary px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]">
+                        Low Relay Hours - Upgrade or Buy Credits
+                      </p>
+                    ) : null}
+                    {relayProfile.expiringHoursWithin7Days > 0 ? (
+                      <p className="rounded-xl border-2 border-black bg-lightgray px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]">
+                        Banked hours expire in{" "}
+                        {relayProfile.expiringInDays ?? "<7"} days.
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="text-sm text-black/70">No relay plan yet.</p>
+                )}
+                {relayError ? (
+                  <p className="text-sm font-semibold text-black">{relayError}</p>
+                ) : null}
               </CardContent>
             </Card>
 

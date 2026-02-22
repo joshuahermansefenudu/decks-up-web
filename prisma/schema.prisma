@@ -24,6 +24,25 @@ enum LobbyMode {
   VIRTUAL
 }
 
+enum PlanType {
+  FREE
+  CORE
+  PRO
+}
+
+enum RelayBucketSource {
+  MONTHLY_GRANT
+  CREDIT_PACK
+}
+
+enum RelaySessionStatus {
+  PENDING
+  APPROVED
+  DENIED
+  ACTIVE
+  ENDED
+}
+
 model Lobby {
   id        String      @id @default(cuid())
   code      String      @unique @db.VarChar(6)
@@ -82,4 +101,62 @@ model AccountPhoto {
   createdAt   DateTime @default(now())
 
   @@index([userId, createdAt])
+}
+
+model UserRelayProfile {
+  userId           String   @id
+  planType         PlanType @default(FREE)
+  monthlyHours     Float    @default(0)
+  bankedHours      Float    @default(0)
+  bankExpiryDate   DateTime?
+  loyaltyActive    Boolean  @default(false)
+  lastRenewalDate  DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  buckets RelayHourBucket[]
+  hostedRelaySessions    RelaySession[] @relation("RelayHost")
+  requestedRelaySessions RelaySession[] @relation("RelayRequester")
+}
+
+model RelayHourBucket {
+  id             String            @id @default(cuid())
+  userId         String
+  source         RelayBucketSource
+  totalHours     Float
+  remainingHours Float
+  expiresAt      DateTime
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  user UserRelayProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model RelaySession {
+  id                      String            @id @default(cuid())
+  lobbyId                 String
+  requesterPlayerId       String
+  requesterUserId         String?
+  hostPlayerId            String?
+  hostUserId              String?
+  status                  RelaySessionStatus @default(PENDING)
+  maxMinutesGranted       Int?
+  activeVideoParticipants Int               @default(0)
+  baseRate                Float             @default(0.2)
+  startedAt               DateTime?
+  endedAt                 DateTime?
+  expiresAt               DateTime
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  lastDeductedAt          DateTime?
+  note                    String?
+
+  requester UserRelayProfile? @relation("RelayRequester", fields: [requesterUserId], references: [userId], onDelete: SetNull)
+  host      UserRelayProfile? @relation("RelayHost", fields: [hostUserId], references: [userId], onDelete: SetNull)
+
+  @@index([lobbyId, status])
+  @@index([hostUserId, status])
+  @@index([requesterPlayerId, status])
 }

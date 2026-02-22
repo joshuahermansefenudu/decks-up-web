@@ -4,6 +4,7 @@ import * as React from "react"
 import { useRouter } from "next/navigation"
 
 import { Badge } from "@/components/ui/badge"
+import { PlanBadge, type PlanType } from "@/components/ui/plan-badge"
 import {
   Card,
   CardContent,
@@ -11,13 +12,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { SecondaryButton } from "@/components/ui/secondary-button"
 
 type LobbyPlayer = {
   id: string
   name: string
   isHost: boolean
   photoCount: number
+  planType?: PlanType
 }
 
 type LobbyPlayersCardProps = {
@@ -105,25 +106,31 @@ function LobbyPlayersCard({
               return (
                 <li
                   key={player.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border-2 border-black bg-offwhite px-3 py-2 shadow-[2px_2px_0_#000]"
+                  className="flex flex-col gap-2 overflow-visible rounded-lg border-2 border-black bg-offwhite px-3 py-2 shadow-[2px_2px_0_#000]"
                 >
-                  <span className="font-semibold">
+                  <span className="break-words font-semibold">
                     {player.name}
                     {player.isHost ? " (Host)" : ""}
                   </span>
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="min-w-[56px] justify-center">
+                    <PlanBadge planType={player.planType ?? "FREE"} />
+                  </div>
+                  <div className="ml-auto flex max-w-full items-center gap-2 pr-1">
+                    <Badge
+                      variant="outline"
+                      className="min-w-[52px] justify-center px-2 py-0.5 text-[11px]"
+                    >
                       {Math.min(player.photoCount, 5)}/5
                     </Badge>
                     {canRemoveThisPlayer ? (
-                      <SecondaryButton
+                      <button
                         type="button"
-                        className="px-2 py-1 text-xs"
+                        className="inline-flex h-8 shrink-0 items-center justify-center whitespace-nowrap rounded-full border-2 border-black bg-black px-2.5 text-[10px] font-semibold uppercase tracking-wide text-offwhite shadow-[1px_1px_0_#000] transition-transform disabled:cursor-not-allowed disabled:opacity-60 disabled:shadow-none"
                         disabled={removingId === player.id}
                         onClick={() => handleRemovePlayer(player.id)}
                       >
                         {removingId === player.id ? "Removing..." : "Remove"}
-                      </SecondaryButton>
+                      </button>
                     ) : null}
                   </div>
                 </li>

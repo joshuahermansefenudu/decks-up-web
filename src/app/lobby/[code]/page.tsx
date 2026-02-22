@@ -40,6 +40,7 @@ type LobbyResponse = {
     isHost: boolean
     createdAt: string
     photoCount: number
+    planType: "FREE" | "CORE" | "PRO"
   }>
   photos: {
     totalPhotos: number
