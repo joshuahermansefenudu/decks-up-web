@@ -22,6 +22,12 @@ type RelayPurchaseOverlayProps = {
   accessToken?: string
   currentPlanType?: "FREE" | "CORE" | "PRO"
   hasActiveSubscription?: boolean
+  initialSelection?: {
+    kind: "SUBSCRIPTION" | "CREDIT_PACK"
+    planType?: PurchasePlanType
+    creditPack?: PurchaseCreditPack
+  } | null
+  onInitialSelectionConsumed?: () => void
   onClose: () => void
   onRequireSignIn?: () => void
   onCompleted?: () => Promise<void> | void
@@ -103,6 +109,8 @@ function RelayPurchaseOverlay({
   accessToken,
   currentPlanType,
   hasActiveSubscription,
+  initialSelection,
+  onInitialSelectionConsumed,
   onClose,
   onRequireSignIn,
   onCompleted,
@@ -115,6 +123,7 @@ function RelayPurchaseOverlay({
   const [isWaitingForWebhook, setIsWaitingForWebhook] = React.useState(false)
   const [error, setError] = React.useState("")
   const [successMessage, setSuccessMessage] = React.useState("")
+  const autoSelectionKeyRef = React.useRef("")
 
   const token = accessToken ?? ""
 
@@ -130,6 +139,7 @@ function RelayPurchaseOverlay({
   React.useEffect(() => {
     if (!open) {
       resetState()
+      autoSelectionKeyRef.current = ""
       if (embeddedCheckoutRef.current) {
         embeddedCheckoutRef.current.destroy()
         embeddedCheckoutRef.current = null
@@ -241,6 +251,10 @@ function RelayPurchaseOverlay({
           originContext,
           originPath,
         })
+        if (session.mode === "redirect") {
+          window.location.href = session.checkoutUrl
+          return
+        }
         setCheckoutPayload(session)
         setView("checkout")
       } catch (sessionError) {
@@ -304,6 +318,56 @@ function RelayPurchaseOverlay({
       setIsSubmitting(false)
     }
   }, [onCompleted, token])
+
+  React.useEffect(() => {
+    if (
+      !open ||
+      !isAuthenticated ||
+      !initialSelection ||
+      view !== "catalog" ||
+      isSubmitting ||
+      isWaitingForWebhook ||
+      checkoutPayload
+    ) {
+      return
+    }
+
+    const selectionKey = JSON.stringify(initialSelection)
+    if (autoSelectionKeyRef.current === selectionKey) {
+      return
+    }
+    autoSelectionKeyRef.current = selectionKey
+    onInitialSelectionConsumed?.()
+
+    if (
+      initialSelection.kind === "CREDIT_PACK" &&
+      initialSelection.creditPack
+    ) {
+      void openEmbeddedCheckout({
+        kind: "CREDIT_PACK",
+        creditPack: initialSelection.creditPack,
+      })
+      return
+    }
+
+    if (
+      initialSelection.kind === "SUBSCRIPTION" &&
+      initialSelection.planType
+    ) {
+      void handleChoosePlan(initialSelection.planType)
+    }
+  }, [
+    checkoutPayload,
+    handleChoosePlan,
+    initialSelection,
+    isAuthenticated,
+    isSubmitting,
+    isWaitingForWebhook,
+    onInitialSelectionConsumed,
+    open,
+    openEmbeddedCheckout,
+    view,
+  ])
 
   if (!open) {
     return null

@@ -53,9 +53,14 @@ type CreateCheckoutInput = {
 }
 
 type CheckoutSessionResult = {
+  mode: "embedded"
   sessionId: string
   clientSecret: string
   publishableKey: string
+} | {
+  mode: "redirect"
+  sessionId: string
+  checkoutUrl: string
 }
 
 type SubscriptionSummary = {
@@ -702,14 +707,13 @@ export async function createCheckoutSessionForUser(
 ): Promise<CheckoutSessionResult> {
   await ensureRelayProfileRow(input.userId)
   const stripe = getStripeServerClient()
-
-  const publishableKey = getStripePublishableKey()
   const customer = await ensureStripeCustomer({
     userId: input.userId,
     email: input.email,
   })
 
   const returnUrl = getCheckoutReturnUrl(input.origin, toOriginPath(input.originPath))
+  const useHostedCheckout = input.originContext === "pricing"
   const metadata: Record<string, string> = {
     userId: input.userId,
     kind: input.kind,
@@ -717,11 +721,18 @@ export async function createCheckoutSessionForUser(
   }
 
   const createSessionData: Stripe.Checkout.SessionCreateParams = {
-    ui_mode: "embedded",
     customer: customer.stripeCustomerId,
-    return_url: returnUrl,
     client_reference_id: input.userId,
     metadata,
+    ...(useHostedCheckout
+      ? {
+          success_url: returnUrl,
+          cancel_url: returnUrl,
+        }
+      : {
+          ui_mode: "embedded" as const,
+          return_url: returnUrl,
+        }),
   }
 
   if (input.kind === "SUBSCRIPTION") {
@@ -779,7 +790,21 @@ export async function createCheckoutSessionForUser(
       originContext: input.originContext ?? "unknown",
     })
 
+    if (useHostedCheckout) {
+      const checkoutUrl = session.url
+      if (!checkoutUrl) {
+        throw new Error("stripe_missing_checkout_url")
+      }
+      return {
+        mode: "redirect",
+        sessionId: session.id,
+        checkoutUrl,
+      }
+    }
+
+    const publishableKey = getStripePublishableKey()
     return {
+      mode: "embedded",
       sessionId: session.id,
       clientSecret,
       publishableKey,
@@ -822,7 +847,21 @@ export async function createCheckoutSessionForUser(
     originContext: input.originContext ?? "unknown",
   })
 
+  if (useHostedCheckout) {
+    const checkoutUrl = paymentSession.url
+    if (!checkoutUrl) {
+      throw new Error("stripe_missing_checkout_url")
+    }
+    return {
+      mode: "redirect",
+      sessionId: paymentSession.id,
+      checkoutUrl,
+    }
+  }
+
+  const publishableKey = getStripePublishableKey()
   return {
+    mode: "embedded",
     sessionId: paymentSession.id,
     clientSecret,
     publishableKey,
@@ -1009,6 +1048,9 @@ export function normalizePriceSelectionError(error: unknown): string {
   }
   if (message.includes("Missing NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY")) {
     return "Stripe publishable key is not configured."
+  }
+  if (message === "stripe_missing_checkout_url") {
+    return "Stripe checkout URL is unavailable for this purchase."
   }
   return message
 }

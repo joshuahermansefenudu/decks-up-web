@@ -3,9 +3,14 @@ export type PurchasePlanType = "CORE" | "PRO"
 export type PurchaseCreditPack = "STARTER" | "STANDARD" | "PARTY"
 
 export type CheckoutSessionResponse = {
+  mode: "embedded"
   sessionId: string
   clientSecret: string
   publishableKey: string
+} | {
+  mode: "redirect"
+  sessionId: string
+  checkoutUrl: string
 }
 
 export type SubscriptionSummaryResponse = {

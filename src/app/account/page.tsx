@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
@@ -17,6 +17,7 @@ import {
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
 import { RelayPurchaseOverlay } from "@/components/payments/relay-purchase-overlay"
+import type { PurchaseCreditPack, PurchasePlanType } from "@/lib/payments/client"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 type AccountPhoto = {
@@ -50,6 +51,7 @@ type BillingSubscriptionSummary = {
 
 export default function AccountPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [session, setSession] = React.useState<Session | null>(null)
   const [isSessionLoading, setIsSessionLoading] = React.useState(true)
   const [photos, setPhotos] = React.useState<AccountPhoto[]>([])
@@ -67,6 +69,11 @@ export default function AccountPage() {
     React.useState(false)
   const [isPurchaseOverlayOpen, setIsPurchaseOverlayOpen] =
     React.useState(false)
+  const [initialPurchaseSelection, setInitialPurchaseSelection] = React.useState<{
+    kind: "SUBSCRIPTION" | "CREDIT_PACK"
+    planType?: PurchasePlanType
+    creditPack?: PurchaseCreditPack
+  } | null>(null)
   const [relayError, setRelayError] = React.useState("")
 
   const accessToken = session?.access_token ?? ""
@@ -86,10 +93,6 @@ export default function AccountPage() {
 
     void init()
 
-    const params = new URLSearchParams(window.location.search)
-    const next = params.get("next")
-    setNextPath(next === "/join" || next === "/create" ? next : "")
-
     const { data: subscription } = supabaseBrowser.auth.onAuthStateChange(
       (_event, currentSession) => {
         setSession(currentSession)
@@ -101,6 +104,54 @@ export default function AccountPage() {
       subscription.subscription.unsubscribe()
     }
   }, [])
+
+  React.useEffect(() => {
+    const next = searchParams.get("next")
+    setNextPath(next === "/join" || next === "/create" ? next : "")
+  }, [searchParams])
+
+  React.useEffect(() => {
+    const purchase = searchParams.get("purchase")
+    const plan = searchParams.get("plan")
+    const pack = searchParams.get("pack")
+
+    if (!purchase) {
+      return
+    }
+
+    let selection:
+      | {
+          kind: "SUBSCRIPTION" | "CREDIT_PACK"
+          planType?: PurchasePlanType
+          creditPack?: PurchaseCreditPack
+        }
+      | null = null
+
+    if (purchase === "plan" && (plan === "CORE" || plan === "PRO")) {
+      selection = { kind: "SUBSCRIPTION", planType: plan }
+    } else if (
+      purchase === "pack" &&
+      (pack === "STARTER" || pack === "STANDARD" || pack === "PARTY")
+    ) {
+      selection = { kind: "CREDIT_PACK", creditPack: pack }
+    }
+
+    if (!selection) {
+      return
+    }
+
+    setInitialPurchaseSelection(selection)
+    setIsPurchaseOverlayOpen(true)
+
+    const nextParams = new URLSearchParams(searchParams.toString())
+    nextParams.delete("purchase")
+    nextParams.delete("plan")
+    nextParams.delete("pack")
+    const nextQuery = nextParams.toString()
+    router.replace(nextQuery ? `/account?${nextQuery}` : "/account", {
+      scroll: false,
+    })
+  }, [router, searchParams])
 
   const fetchPhotos = React.useCallback(async () => {
     if (!accessToken) {
@@ -281,6 +332,10 @@ export default function AccountPage() {
           accessToken={accessToken}
           currentPlanType={relayProfile?.planType ?? "FREE"}
           hasActiveSubscription={hasActiveSubscription}
+          initialSelection={initialPurchaseSelection}
+          onInitialSelectionConsumed={() => {
+            setInitialPurchaseSelection(null)
+          }}
           onClose={() => setIsPurchaseOverlayOpen(false)}
           onRequireSignIn={() => {
             router.push(loginHref)

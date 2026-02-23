@@ -6,6 +6,11 @@ import type { Session } from "@supabase/supabase-js"
 
 import { PricingCard } from "@/components/pricing/pricing-card"
 import { PrimaryButton } from "@/components/ui/primary-button"
+import {
+  createCheckoutSession,
+  type PurchaseCreditPack,
+  type PurchasePlanType,
+} from "@/lib/payments/client"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 const mainPlans = [
@@ -85,6 +90,9 @@ const creditPacks = [
 
 export default function PricingPage() {
   const [session, setSession] = React.useState<Session | null>(null)
+  const [isStartingCheckout, setIsStartingCheckout] = React.useState(false)
+  const [checkoutError, setCheckoutError] = React.useState("")
+  const accessToken = session?.access_token ?? ""
 
   React.useEffect(() => {
     let mounted = true
@@ -116,6 +124,47 @@ export default function PricingPage() {
     }
   }, [])
 
+  const startHostedCheckout = React.useCallback(
+    async (input: { kind: "SUBSCRIPTION"; planType: PurchasePlanType } | { kind: "CREDIT_PACK"; creditPack: PurchaseCreditPack }) => {
+      if (isStartingCheckout) {
+        return
+      }
+      if (!session || !accessToken) {
+        window.location.href = "/account/login?next=%2Fpricing"
+        return
+      }
+
+      setIsStartingCheckout(true)
+      setCheckoutError("")
+
+      try {
+        const result = await createCheckoutSession({
+          accessToken,
+          kind: input.kind,
+          planType: input.kind === "SUBSCRIPTION" ? input.planType : undefined,
+          creditPack: input.kind === "CREDIT_PACK" ? input.creditPack : undefined,
+          originContext: "pricing",
+          originPath: "/pricing?billing=success",
+        })
+
+        if (result.mode === "redirect") {
+          window.location.href = result.checkoutUrl
+          return
+        }
+
+        window.location.href =
+          input.kind === "SUBSCRIPTION"
+            ? `/account?purchase=plan&plan=${input.planType}`
+            : `/account?purchase=pack&pack=${input.creditPack}`
+      } catch (error) {
+        setCheckoutError(String((error as Error | undefined)?.message ?? error))
+      } finally {
+        setIsStartingCheckout(false)
+      }
+    },
+    [accessToken, isStartingCheckout, session]
+  )
+
   return (
     <main className="mx-auto w-full max-w-6xl px-4 pb-14 pt-8">
       <div className="space-y-12">
@@ -137,8 +186,13 @@ export default function PricingPage() {
               </p>
             ) : null}
             <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
-              Relay purchases are completed in-game.
+              Paid upgrades open secure Stripe checkout.
             </p>
+            {checkoutError ? (
+              <p className="rounded-xl border-2 border-black bg-offwhite px-3 py-2 text-xs font-semibold text-black shadow-[2px_2px_0_#000]">
+                {checkoutError}
+              </p>
+            ) : null}
           </div>
         </section>
 
@@ -150,21 +204,40 @@ export default function PricingPage() {
             Plans
           </h2>
           <div className="grid gap-5 md:grid-cols-3">
-            {mainPlans.map((plan) => (
-              <PricingCard
-                key={plan.title}
-                title={plan.title}
-                price={plan.price}
-                loyaltyPrice={plan.loyaltyPrice}
-                features={plan.features}
-                ctaLabel={plan.ctaLabel}
-                ctaHref={"planType" in plan ? "/create" : plan.ctaHref}
-                ctaVariant={plan.ctaVariant}
-                badge={plan.badge}
-                featured={plan.featured}
-                loyaltyTooltip={plan.loyaltyTooltip}
-              />
-            ))}
+            {mainPlans.map((plan) => {
+              const paidPlanType = plan.planType
+              const isPaidPlan = paidPlanType === "CORE" || paidPlanType === "PRO"
+
+              return (
+                <PricingCard
+                  key={plan.title}
+                  title={plan.title}
+                  price={plan.price}
+                  loyaltyPrice={plan.loyaltyPrice}
+                  features={plan.features}
+                  ctaLabel={
+                    isPaidPlan && isStartingCheckout
+                      ? "Opening Stripe..."
+                      : plan.ctaLabel
+                  }
+                  ctaHref={isPaidPlan ? undefined : plan.ctaHref}
+                  onCtaClick={
+                    isPaidPlan
+                      ? () => {
+                          void startHostedCheckout({
+                            kind: "SUBSCRIPTION",
+                            planType: paidPlanType,
+                          })
+                        }
+                      : undefined
+                  }
+                  ctaVariant={plan.ctaVariant}
+                  badge={plan.badge}
+                  featured={plan.featured}
+                  loyaltyTooltip={plan.loyaltyTooltip}
+                />
+              )
+            })}
           </div>
         </section>
 
@@ -188,8 +261,13 @@ export default function PricingPage() {
                 title={pack.title}
                 price={pack.price}
                 features={pack.features}
-                ctaLabel="Buy Credits"
-                ctaHref="/create"
+                ctaLabel={isStartingCheckout ? "Opening Stripe..." : "Buy Credits"}
+                onCtaClick={() => {
+                  void startHostedCheckout({
+                    kind: "CREDIT_PACK",
+                    creditPack: pack.creditPack,
+                  })
+                }}
               />
             ))}
           </div>
