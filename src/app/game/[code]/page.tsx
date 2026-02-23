@@ -12,6 +12,8 @@ type GameResponse = {
     code: string
     status: string
     mode: "IN_PERSON" | "VIRTUAL"
+    createdAt: string
+    endedAt: string | null
     activePlayerId: string | null
     currentCardIndex: number
     currentTurnIndex: number
@@ -28,6 +30,14 @@ type GameResponse = {
       title: string
       publicUrl: string
     } | null
+  }
+  summary?: {
+    gameDurationMinutes: number
+    relayMinutesSpent: number
+    relayHoursShared: number
+    remainingSubscriptionHours: number
+    planType: "FREE" | "CORE" | "PRO"
+    hasSubscription: boolean
   }
 }
 

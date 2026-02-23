@@ -196,13 +196,47 @@ export async function setVideoProfile(
         parameters.encodings && parameters.encodings.length > 0
           ? [...parameters.encodings]
           : [{}]
-      encodings[0] = {
-        ...encodings[0],
-        maxBitrate: profile.maxBitrate,
-        maxFramerate: profile.frameRate,
+
+      const normalLayerCaps = [
+        SFU_CONFIG.quality.simulcast.low.maxBitrate,
+        SFU_CONFIG.quality.simulcast.medium.maxBitrate,
+        SFU_CONFIG.quality.simulcast.high.maxBitrate,
+      ]
+      // Relay mode is intentionally constrained to reduce TURN bandwidth cost.
+      const relayLayerCaps = [120_000, profile.maxBitrate, profile.maxBitrate]
+
+      const nextEncodings = encodings.map((encoding, index) => {
+        if (mode === "relay") {
+          const cap = relayLayerCaps[Math.min(index, relayLayerCaps.length - 1)]
+          return {
+            ...encoding,
+            // Keep only low+medium active during relay to avoid high-layer spikes.
+            active: index < 2,
+            maxBitrate: cap,
+            maxFramerate: profile.frameRate,
+          }
+        }
+
+        const cap = normalLayerCaps[Math.min(index, normalLayerCaps.length - 1)]
+        return {
+          ...encoding,
+          active: true,
+          maxBitrate: cap,
+          maxFramerate: profile.frameRate,
+        }
+      })
+
+      if (nextEncodings.length === 1) {
+        nextEncodings[0] = {
+          ...nextEncodings[0],
+          active: true,
+          maxBitrate: profile.maxBitrate,
+          maxFramerate: profile.frameRate,
+        }
       }
+
       try {
-        await sender.setParameters({ ...parameters, encodings })
+        await sender.setParameters({ ...parameters, encodings: nextEncodings })
       } catch {
         // Non-fatal in browsers with sender parameter restrictions.
       }

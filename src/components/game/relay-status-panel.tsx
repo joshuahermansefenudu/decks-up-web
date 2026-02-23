@@ -5,6 +5,8 @@ type RelayRoomState = {
   relayStatus: "PENDING" | "APPROVED" | "DENIED" | "ACTIVE" | "ENDED" | "NONE"
   activeVideoParticipants: number
   burnRatePerMinute: number
+  relayHoursSharedByHost: number
+  relaySharedParticipantCount: number
   remainingHostHours: number
   hostPlanType: PlanType
   relayDisabledReason: string | null
@@ -26,6 +28,7 @@ type RelayRoomState = {
 
 type RelayViewerState = {
   planType: PlanType
+  isHost?: boolean
   canEnableRelay: boolean
   canRequestRelay: boolean
   canShareRelay?: boolean
@@ -108,6 +111,8 @@ function RelayStatusPanel({
 
   const burnRate = room?.burnRatePerMinute ?? 0
   const remaining = room?.remainingHostHours ?? viewer?.totalAvailableHours ?? 0
+  const relayHoursShared = room?.relayHoursSharedByHost ?? 0
+  const relaySharedParticipants = room?.relaySharedParticipantCount ?? 0
   const usagePercent =
     burnRate > 0 ? Math.min(100, Math.max(10, Math.round(burnRate * 20))) : 0
 
@@ -134,7 +139,13 @@ function RelayStatusPanel({
       <div className="mt-3 grid gap-2 text-[11px] font-semibold uppercase tracking-wide text-black/70 sm:grid-cols-3">
         <p>Remaining: {round2(remaining)}h</p>
         <p>Participants: {room?.activeVideoParticipants ?? 0}</p>
-        <p>Burn: {round2(burnRate)}/min</p>
+        <p>Burn: {round2(burnRate)}h/min</p>
+        {viewer?.isHost ? (
+          <>
+            <p>Shared: {round2(relayHoursShared)}h</p>
+            <p>Shared with: {relaySharedParticipants}</p>
+          </>
+        ) : null}
       </div>
 
       <div className="mt-2 h-3 w-full rounded-full border-2 border-black bg-lightgray">

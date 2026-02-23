@@ -51,6 +51,8 @@ type GameState = {
     code: string
     status: string
     mode: "IN_PERSON" | "VIRTUAL"
+    createdAt: string
+    endedAt: string | null
     activePlayerId: string | null
     currentCardIndex: number
     currentTurnIndex: number
@@ -58,6 +60,14 @@ type GameState = {
   players: Player[]
   photos: {
     currentCard: Card | null
+  }
+  summary?: {
+    gameDurationMinutes: number
+    relayMinutesSpent: number
+    relayHoursShared: number
+    remainingSubscriptionHours: number
+    planType: "FREE" | "CORE" | "PRO"
+    hasSubscription: boolean
   }
 }
 
@@ -81,7 +91,7 @@ const VIDEO_PROFILE: Record<
   // P2P first keeps quality higher while avoiding relay costs.
   p2p: { width: 640, height: 480, maxFramerate: 24, maxBitrate: 600_000 },
   // TURN is manual and lower bitrate to reduce relay bandwidth costs.
-  relay: { width: 640, height: 360, maxFramerate: 20, maxBitrate: 400_000 },
+  relay: { width: 640, height: 360, maxFramerate: 15, maxBitrate: 300_000 },
 }
 
 type VideoTileProps = {
@@ -270,6 +280,16 @@ function VideoTile({
       ) : null}
     </div>
   )
+}
+
+function formatMinutesLabel(minutesInput: number) {
+  const minutes = Math.max(0, Math.round(minutesInput))
+  const hoursPart = Math.floor(minutes / 60)
+  const minutesPart = minutes % 60
+  if (hoursPart <= 0) {
+    return `${minutesPart}m`
+  }
+  return `${hoursPart}h ${minutesPart}m`
 }
 
 function GameScreen({ initialState, playerId }: GameScreenProps) {
@@ -921,9 +941,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       relayViewer.activeRelaySessionId &&
       requestedTransport !== "relay"
     ) {
-      setRequestedTransport("relay")
       setTurnToggleUnlocked(true)
-      setWebrtcStatus("Relay approved. Reconnecting with TURN...")
+      setWebrtcStatus("Relay approved. Turn on relay if direct mode still fails.")
       relayRequestSentRef.current = false
       return
     }
@@ -2572,12 +2591,42 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }
 
   if (state.lobby.status === "ENDED") {
+    const summary = state.summary
+    const gameDurationLabel = formatMinutesLabel(summary?.gameDurationMinutes ?? 0)
+    const relaySpentLabel = formatMinutesLabel(summary?.relayMinutesSpent ?? 0)
+    const relayHoursShared = Number((summary?.relayHoursShared ?? 0).toFixed(2))
+    const remainingHours = Number(
+      (summary?.remainingSubscriptionHours ?? relayViewer?.totalAvailableHours ?? 0).toFixed(2)
+    )
+    const showSubscriptionSummary = Boolean(summary?.hasSubscription)
+
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
         <h1 className="font-display text-3xl uppercase tracking-wide">
           Game Over
         </h1>
         <p className="text-sm text-black/70">Thanks for playing!</p>
+        <div className="w-full max-w-md rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-left shadow-[3px_3px_0_#000]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+            Session Summary
+          </p>
+          <p className="mt-2 text-sm font-semibold text-black">
+            Time played: {gameDurationLabel}
+          </p>
+          <p className="mt-1 text-sm text-black/80">
+            Relay time used: {relaySpentLabel}
+          </p>
+          {relayHoursShared > 0 ? (
+            <p className="mt-1 text-sm text-black/80">
+              Relay hours shared: {relayHoursShared}h
+            </p>
+          ) : null}
+          {showSubscriptionSummary ? (
+            <p className="mt-1 text-sm text-black/80">
+              Relay hours left: {remainingHours}h
+            </p>
+          ) : null}
+        </div>
         <SecondaryButton type="button" onClick={() => router.push("/")}
         >
           Back Home

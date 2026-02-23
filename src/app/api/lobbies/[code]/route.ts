@@ -2,7 +2,10 @@ import { NextResponse } from "next/server"
 
 import { expireLobbyIfNeeded } from "@/lib/lobby-expiration"
 import { prisma } from "@/lib/prisma"
-import { getPlayerPlanMap } from "@/lib/relay/server-relay-pricing"
+import {
+  getPlayerPlanMap,
+  getRelayGameSummaryForUser,
+} from "@/lib/relay/server-relay-pricing"
 
 function normalizeCode(code: string) {
   return (code ?? "").replace(/\s+/g, "").toUpperCase()
@@ -96,12 +99,40 @@ export async function GET(request: Request, { params }: RouteContext) {
     planMap = {}
   }
 
+  const currentPlayer = playerId
+    ? lobby.players.find((player) => player.id === playerId) ?? null
+    : null
+  let relayGameSummary: Awaited<ReturnType<typeof getRelayGameSummaryForUser>> = {
+    gameDurationMinutes: Math.max(
+      0,
+      Math.round(
+        ((lobby.endedAt ?? new Date()).getTime() - lobby.createdAt.getTime()) / 60_000
+      )
+    ),
+    relayMinutesSpent: 0,
+    relayHoursShared: 0,
+    remainingSubscriptionHours: 0,
+    planType: "FREE" as const,
+    hasSubscription: false,
+  }
+  try {
+    relayGameSummary = await getRelayGameSummaryForUser({
+      lobbyId: lobby.id,
+      gameStartedAt: lobby.createdAt,
+      gameEndedAt: lobby.endedAt,
+      authUserId: currentPlayer?.authUserId ?? null,
+    })
+  } catch {
+    // Failsafe for environments that have not run relay-pricing migration yet.
+  }
+
   return NextResponse.json({
     lobby: {
       id: lobby.id,
       code: lobby.code,
       status: lobby.status,
       mode: lobby.mode,
+      createdAt: lobby.createdAt,
       expiresAt: lobby.expiresAt,
       hostPlayerId: lobby.hostPlayerId,
       activePlayerId: lobby.activePlayerId,
@@ -122,5 +153,6 @@ export async function GET(request: Request, { params }: RouteContext) {
       myPhotos,
       currentCard,
     },
+    summary: relayGameSummary,
   })
 }

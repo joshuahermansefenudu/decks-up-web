@@ -3,12 +3,15 @@ import { Prisma, type PlanType, type RelaySessionStatus } from "@prisma/client"
 import { prisma } from "@/lib/prisma"
 
 export const RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE =
+  // This value is in "minutes of relay credit per participant-minute".
+  // Example: 0.2 means each active participant consumes 0.2 minutes of credit per minute.
+  // We convert to hours at deduction time because buckets are stored in hours.
   Number.parseFloat(process.env.RELAY_BASE_RATE_PER_MINUTE ?? "0.2") || 0.2
 export const RELAY_MAX_PARTICIPANTS = Number.parseInt(
   process.env.RELAY_MAX_VIDEO_PARTICIPANTS ?? "6",
   10
 )
-const RELAY_TICK_COOLDOWN_MS = 50_000
+const RELAY_TICK_INTERVAL_MS = 60_000
 const RELAY_SESSION_MAX_MINUTES = 120
 const RENEWAL_CYCLE_DAYS = 30
 const BANK_EXPIRY_DAYS = 90
@@ -44,6 +47,8 @@ export type RelayRoomState = {
   relayStatus: RelaySessionStatus | "NONE"
   activeVideoParticipants: number
   burnRatePerMinute: number
+  relayHoursSharedByHost: number
+  relaySharedParticipantCount: number
   remainingHostHours: number
   hostPlanType: PlanType
   relayDisabledReason: string | null
@@ -61,6 +66,15 @@ export type RelayRoomState = {
     planType: PlanType
     availableHours: number
   }[]
+}
+
+export type RelayGameSummary = {
+  gameDurationMinutes: number
+  relayMinutesSpent: number
+  relayHoursShared: number
+  remainingSubscriptionHours: number
+  planType: PlanType
+  hasSubscription: boolean
 }
 
 type RelayPlayerContext = {
@@ -111,6 +125,10 @@ function addDays(date: Date, days: number) {
 
 function roundHours(value: number) {
   return Math.max(0, Number(value.toFixed(4)))
+}
+
+function toHoursFromMinutes(value: number) {
+  return value / 60
 }
 
 function planRule(planType: PlanType): PlanRule {
@@ -869,7 +887,9 @@ export async function getRelayState(input: {
   const hostSummary = hostPlayer?.summary ?? null
   const activeVideoParticipants = Math.min(players.length, RELAY_MAX_PARTICIPANTS)
   const burnRatePerMinute = roundHours(
-    activeVideoParticipants * RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
+    toHoursFromMinutes(
+      activeVideoParticipants * RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
+    )
   )
 
   const selfSummary = selfContext.summary
@@ -1028,12 +1048,73 @@ export async function getRelayState(input: {
         ? "relay_only_virtual"
         : null
 
+  let relayHoursSharedByHost = 0
+  let relaySharedParticipantCount = 0
+  if (selfContext.id === lobby.hostPlayerId) {
+    const hostRelaySessions = await prisma.relaySession.findMany({
+      where: {
+        lobbyId: lobby.id,
+        hostPlayerId: lobby.hostPlayerId,
+        startedAt: { not: null },
+      },
+      select: {
+        requesterPlayerId: true,
+        startedAt: true,
+        endedAt: true,
+        maxMinutesGranted: true,
+        activeVideoParticipants: true,
+        baseRate: true,
+      },
+    })
+
+    const sharedRequesterIds = new Set<string>()
+    let sharedHours = 0
+    for (const session of hostRelaySessions) {
+      if (!session.startedAt) {
+        continue
+      }
+      const cappedEnd = session.endedAt ?? now
+      const rawMinutes = Math.max(
+        0,
+        (cappedEnd.getTime() - session.startedAt.getTime()) / 60_000
+      )
+      const maxMinutes = Math.max(
+        1,
+        Math.min(
+          session.maxMinutesGranted ?? RELAY_SESSION_MAX_MINUTES,
+          RELAY_SESSION_MAX_MINUTES
+        )
+      )
+      const effectiveMinutes = Math.min(rawMinutes, maxMinutes)
+      const participants = Math.max(
+        1,
+        Math.min(
+          session.activeVideoParticipants || activeVideoParticipants,
+          RELAY_MAX_PARTICIPANTS
+        )
+      )
+      const sessionRate =
+        Number.isFinite(session.baseRate) && session.baseRate > 0
+          ? session.baseRate
+          : RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
+      sharedHours += toHoursFromMinutes(
+        effectiveMinutes * participants * sessionRate
+      )
+      sharedRequesterIds.add(session.requesterPlayerId)
+    }
+
+    relayHoursSharedByHost = roundHours(sharedHours)
+    relaySharedParticipantCount = sharedRequesterIds.size
+  }
+
   return {
     room: {
       relayEnabled: Boolean(activeSession),
       relayStatus: activeSession?.status ?? "NONE",
       activeVideoParticipants,
       burnRatePerMinute,
+      relayHoursSharedByHost,
+      relaySharedParticipantCount,
       remainingHostHours: relayHoursOwner?.totalAvailableHours ?? 0,
       hostPlanType: relayHoursOwner?.planType ?? "FREE",
       relayDisabledReason,
@@ -1052,6 +1133,7 @@ export async function getRelayState(input: {
     },
     viewer: {
       planType: selfSummary?.planType ?? "FREE",
+      isHost: selfContext.isHost,
       canEnableRelay: canEnableRelaySelf,
       canRequestRelay: canRequestRelayFromSharers,
       canShareRelay,
@@ -1066,6 +1148,93 @@ export async function getRelayState(input: {
       shareCandidates,
       incomingRelayRequests,
     },
+  }
+}
+
+export async function getRelayGameSummaryForUser(input: {
+  lobbyId: string
+  gameStartedAt: Date
+  gameEndedAt?: Date | null
+  authUserId?: string | null
+}): Promise<RelayGameSummary> {
+  const now = new Date()
+  const sessionEnd = input.gameEndedAt ?? now
+  const gameDurationMinutes = Math.max(
+    0,
+    Math.round((sessionEnd.getTime() - input.gameStartedAt.getTime()) / 60_000)
+  )
+
+  if (!input.authUserId) {
+    return {
+      gameDurationMinutes,
+      relayMinutesSpent: 0,
+      relayHoursShared: 0,
+      remainingSubscriptionHours: 0,
+      planType: "FREE",
+      hasSubscription: false,
+    }
+  }
+
+  const [profile, sessions] = await Promise.all([
+    getRelayProfile(input.authUserId),
+    prisma.relaySession.findMany({
+      where: {
+        lobbyId: input.lobbyId,
+        hostUserId: input.authUserId,
+        startedAt: { not: null },
+      },
+      select: {
+        startedAt: true,
+        endedAt: true,
+        maxMinutesGranted: true,
+        activeVideoParticipants: true,
+        baseRate: true,
+      },
+    }),
+  ])
+
+  let relayMinutesSpent = 0
+  let relayHoursShared = 0
+  for (const session of sessions) {
+    if (!session.startedAt) {
+      continue
+    }
+    const cappedEnd = session.endedAt ?? sessionEnd
+    const rawMinutes = Math.max(
+      0,
+      (cappedEnd.getTime() - session.startedAt.getTime()) / 60_000
+    )
+    const maxMinutes = Math.max(
+      1,
+      Math.min(
+        session.maxMinutesGranted ?? RELAY_SESSION_MAX_MINUTES,
+        RELAY_SESSION_MAX_MINUTES
+      )
+    )
+    relayMinutesSpent += Math.min(rawMinutes, maxMinutes)
+    const participants = Math.max(
+      1,
+      Math.min(
+        session.activeVideoParticipants || 1,
+        RELAY_MAX_PARTICIPANTS
+      )
+    )
+    const sessionRate =
+      Number.isFinite(session.baseRate) && session.baseRate > 0
+        ? session.baseRate
+        : RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
+    relayHoursShared += toHoursFromMinutes(
+      Math.min(rawMinutes, maxMinutes) * participants * sessionRate
+    )
+  }
+
+  return {
+    gameDurationMinutes,
+    relayMinutesSpent: Number(relayMinutesSpent.toFixed(1)),
+    relayHoursShared: roundHours(relayHoursShared),
+    remainingSubscriptionHours: profile.totalAvailableHours,
+    planType: profile.planType,
+    hasSubscription: profile.planType !== "FREE",
   }
 }
 
@@ -1197,10 +1366,10 @@ export async function deductRelayTick(input: {
       }
     }
 
-    if (
-      session.lastDeductedAt &&
-      now.getTime() - session.lastDeductedAt.getTime() < RELAY_TICK_COOLDOWN_MS
-    ) {
+    const lastBillingAnchor = session.lastDeductedAt ?? startedAt
+    const elapsedSinceLastBillingMs = now.getTime() - lastBillingAnchor.getTime()
+
+    if (elapsedSinceLastBillingMs < RELAY_TICK_INTERVAL_MS) {
       const hostSummary = session.hostUserId
         ? await getRelayProfile(session.hostUserId)
         : null
@@ -1216,7 +1385,10 @@ export async function deductRelayTick(input: {
       1,
       Math.min(input.activeVideoParticipants, RELAY_MAX_PARTICIPANTS)
     )
-    const amount = roundHours(participants * session.baseRate)
+    const elapsedBillingMinutes = elapsedSinceLastBillingMs / 60_000
+    const amount = roundHours(
+      toHoursFromMinutes(participants * session.baseRate) * elapsedBillingMinutes
+    )
 
     if (!session.hostUserId) {
       await tx.relaySession.update({

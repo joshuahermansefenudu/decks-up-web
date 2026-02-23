@@ -58,8 +58,8 @@ export const SFU_CONFIG = {
       relay: {
         width: 640,
         height: 360,
-        frameRate: 20,
-        maxBitrate: 350_000,
+        frameRate: 15,
+        maxBitrate: 300_000,
       },
     },
     relayDetectPollMs: 3_000,
@@ -75,4 +75,3 @@ export const SFU_CONFIG = {
     allowPayAsYouGoOverage: false,
   },
 } as const
-
