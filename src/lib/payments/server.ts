@@ -767,11 +767,6 @@ export async function createCheckoutSessionForUser(
       },
     })
 
-    const clientSecret = session.client_secret
-    if (!clientSecret) {
-      throw new Error("stripe_missing_client_secret")
-    }
-
     await prisma.billingCheckoutSession.create({
       data: {
         stripeCheckoutSessionId: session.id,
@@ -802,6 +797,11 @@ export async function createCheckoutSessionForUser(
       }
     }
 
+    const clientSecret = session.client_secret
+    if (!clientSecret) {
+      throw new Error("stripe_missing_client_secret")
+    }
+
     const publishableKey = getStripePublishableKey()
     return {
       mode: "embedded",
@@ -823,11 +823,6 @@ export async function createCheckoutSessionForUser(
     mode: "payment",
     line_items: [{ price: packPriceId, quantity: 1 }],
   })
-
-  const clientSecret = paymentSession.client_secret
-  if (!clientSecret) {
-    throw new Error("stripe_missing_client_secret")
-  }
 
   await prisma.billingCheckoutSession.create({
     data: {
@@ -857,6 +852,11 @@ export async function createCheckoutSessionForUser(
       sessionId: paymentSession.id,
       checkoutUrl,
     }
+  }
+
+  const clientSecret = paymentSession.client_secret
+  if (!clientSecret) {
+    throw new Error("stripe_missing_client_secret")
   }
 
   const publishableKey = getStripePublishableKey()
