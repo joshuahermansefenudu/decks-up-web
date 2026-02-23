@@ -724,6 +724,7 @@ export async function createCheckoutSessionForUser(
     customer: customer.stripeCustomerId,
     client_reference_id: input.userId,
     metadata,
+    allow_promotion_codes: true,
     ...(useHostedCheckout
       ? {
           success_url: returnUrl,
