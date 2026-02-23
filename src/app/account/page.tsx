@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
@@ -51,7 +51,6 @@ type BillingSubscriptionSummary = {
 
 export default function AccountPage() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const [session, setSession] = React.useState<Session | null>(null)
   const [isSessionLoading, setIsSessionLoading] = React.useState(true)
   const [photos, setPhotos] = React.useState<AccountPhoto[]>([])
@@ -106,14 +105,17 @@ export default function AccountPage() {
   }, [])
 
   React.useEffect(() => {
-    const next = searchParams.get("next")
-    setNextPath(next === "/join" || next === "/create" ? next : "")
-  }, [searchParams])
+    if (typeof window === "undefined") {
+      return
+    }
 
-  React.useEffect(() => {
-    const purchase = searchParams.get("purchase")
-    const plan = searchParams.get("plan")
-    const pack = searchParams.get("pack")
+    const params = new URLSearchParams(window.location.search)
+    const next = params.get("next")
+    setNextPath(next === "/join" || next === "/create" ? next : "")
+
+    const purchase = params.get("purchase")
+    const plan = params.get("plan")
+    const pack = params.get("pack")
 
     if (!purchase) {
       return
@@ -143,15 +145,14 @@ export default function AccountPage() {
     setInitialPurchaseSelection(selection)
     setIsPurchaseOverlayOpen(true)
 
-    const nextParams = new URLSearchParams(searchParams.toString())
-    nextParams.delete("purchase")
-    nextParams.delete("plan")
-    nextParams.delete("pack")
-    const nextQuery = nextParams.toString()
+    params.delete("purchase")
+    params.delete("plan")
+    params.delete("pack")
+    const nextQuery = params.toString()
     router.replace(nextQuery ? `/account?${nextQuery}` : "/account", {
       scroll: false,
     })
-  }, [router, searchParams])
+  }, [router])
 
   const fetchPhotos = React.useCallback(async () => {
     if (!accessToken) {
