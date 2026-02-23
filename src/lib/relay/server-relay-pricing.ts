@@ -55,6 +55,22 @@ export type RelayRoomState = {
     requesterName: string
     estimatedBurnRatePerMinute: number
   } | null
+  relaySharers: {
+    playerId: string
+    name: string
+    planType: PlanType
+    availableHours: number
+  }[]
+}
+
+type RelayPlayerContext = {
+  id: string
+  name: string
+  isHost: boolean
+  authUserId: string | null
+  summary: RelayProfileSummary | null
+  totalAvailableHours: number
+  planType: PlanType
 }
 
 const PLAN_RULES: Record<PlanType, PlanRule> = {
@@ -259,6 +275,11 @@ async function recomputeProfileSummary(
 
 async function runRenewalIfDue(userId: string, now: Date, db: RelayDbClient) {
   const profile = await ensureProfile(userId, db)
+  // Stripe-managed subscriptions grant monthly hours through verified webhooks.
+  // Skip local time-based renewals to avoid duplicate monthly grants.
+  if (profile.isStripeManaged) {
+    return
+  }
   const rules = planRule(profile.planType)
   if (rules.monthlyHours <= 0) {
     return
@@ -340,6 +361,75 @@ export async function getRelayProfile(userId: string) {
   })
 }
 
+async function getRelayProfileInTx(
+  userId: string,
+  now: Date,
+  db: RelayDbClient
+): Promise<RelayProfileSummary> {
+  await ensureProfile(userId, db)
+  await pruneExpiredBuckets(userId, now, db)
+  await runRenewalIfDue(userId, now, db)
+  return recomputeProfileSummary(userId, now, db)
+}
+
+async function buildRelayPlayerContexts(
+  players: Array<{
+    id: string
+    name: string
+    isHost: boolean
+    authUserId: string | null
+  }>,
+  options?: { db?: RelayDbClient; now?: Date }
+): Promise<RelayPlayerContext[]> {
+  const summaries = new Map<string, RelayProfileSummary>()
+  const db = options?.db
+  const now = options?.now ?? new Date()
+  const authUserIds = [
+    ...new Set(players.map((player) => player.authUserId).filter(Boolean)),
+  ] as string[]
+
+  await Promise.all(
+    authUserIds.map(async (userId) => {
+      const summary = db
+        ? await getRelayProfileInTx(userId, now, db)
+        : await getRelayProfile(userId)
+      summaries.set(userId, summary)
+    })
+  )
+
+  return players.map((player) => {
+    const summary = player.authUserId ? summaries.get(player.authUserId) ?? null : null
+    return {
+      ...player,
+      summary,
+      totalAvailableHours: summary?.totalAvailableHours ?? 0,
+      planType: summary?.planType ?? "FREE",
+    }
+  })
+}
+
+function pickPreferredSharer(
+  sharers: RelayPlayerContext[],
+  requestedSharerId?: string | null
+): RelayPlayerContext | null {
+  if (!sharers.length) {
+    return null
+  }
+
+  if (requestedSharerId) {
+    return sharers.find((sharer) => sharer.id === requestedSharerId) ?? null
+  }
+
+  const hostSharer = sharers.find((sharer) => sharer.isHost)
+  if (hostSharer) {
+    return hostSharer
+  }
+
+  return sharers
+    .slice()
+    .sort((a, b) => b.totalAvailableHours - a.totalAvailableHours)[0]
+}
+
 export async function setRelayPlan(userId: string, nextPlan: PlanType) {
   return prisma.$transaction(async (tx) => {
     const now = new Date()
@@ -350,6 +440,8 @@ export async function setRelayPlan(userId: string, nextPlan: PlanType) {
       data: {
         planType: nextPlan,
         monthlyHours: rules.monthlyHours,
+        isStripeManaged: false,
+        stripeSubscriptionStatus: null,
       },
     })
     await pruneExpiredBuckets(userId, now, tx)
@@ -408,8 +500,10 @@ export async function getPlayerPlanMap(
 export async function requestRelayAccess(input: {
   lobbyCode: string
   requesterPlayerId: string
+  sharerPlayerId?: string
 }) {
   return prisma.$transaction(async (tx) => {
+    const now = new Date()
     const code = input.lobbyCode.trim().toUpperCase()
     const requesterPlayerId = input.requesterPlayerId.trim()
     if (!code || !requesterPlayerId) {
@@ -422,7 +516,6 @@ export async function requestRelayAccess(input: {
         id: true,
         status: true,
         mode: true,
-        hostPlayerId: true,
       },
     })
 
@@ -436,35 +529,66 @@ export async function requestRelayAccess(input: {
       throw new Error("not_in_game")
     }
 
-    const requester = await tx.player.findUnique({
-      where: { id: requesterPlayerId },
-      select: { id: true, lobbyId: true, authUserId: true, leftAt: true, name: true },
+    const players = await tx.player.findMany({
+      where: {
+        lobbyId: lobby.id,
+        leftAt: null,
+      },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        name: true,
+        authUserId: true,
+        isHost: true,
+      },
     })
 
-    if (!requester || requester.lobbyId !== lobby.id || requester.leftAt) {
+    const contexts = await buildRelayPlayerContexts(players, { db: tx, now })
+    const requester = contexts.find((player) => player.id === requesterPlayerId)
+    if (!requester) {
       throw new Error("requester_not_active")
     }
-
-    const host = lobby.hostPlayerId
-      ? await tx.player.findUnique({
-          where: { id: lobby.hostPlayerId },
-          select: { id: true, authUserId: true, leftAt: true },
-        })
-      : null
-
-    if (!host || host.leftAt) {
-      throw new Error("host_unavailable")
+    if (requester.totalAvailableHours > 0) {
+      throw new Error("requester_has_credits")
     }
-    if (!host.authUserId) {
-      throw new Error("host_not_subscribed")
+
+    const sharerCandidates = contexts.filter(
+      (player) =>
+        player.id !== requester.id &&
+        Boolean(player.authUserId) &&
+        player.totalAvailableHours > 0
+    )
+    if (!sharerCandidates.length) {
+      throw new Error("no_sharer_available")
+    }
+
+    const sharer = pickPreferredSharer(
+      sharerCandidates,
+      input.sharerPlayerId?.trim() ?? null
+    )
+    if (!sharer || !sharer.authUserId) {
+      throw new Error("selected_sharer_unavailable")
+    }
+
+    const activeForSharer = await tx.relaySession.count({
+      where: {
+        lobbyId: lobby.id,
+        hostPlayerId: sharer.id,
+        status: { in: ["APPROVED", "ACTIVE"] },
+        expiresAt: { gte: now },
+      },
+    })
+    if (activeForSharer >= RELAY_MAX_PARTICIPANTS) {
+      throw new Error("relay_sharer_capacity_reached")
     }
 
     const openExisting = await tx.relaySession.findFirst({
       where: {
         lobbyId: lobby.id,
         requesterPlayerId: requester.id,
+        hostPlayerId: sharer.id,
         status: { in: ["PENDING", "APPROVED", "ACTIVE"] },
-        expiresAt: { gte: new Date() },
+        expiresAt: { gte: now },
       },
       orderBy: { createdAt: "desc" },
     })
@@ -472,19 +596,8 @@ export async function requestRelayAccess(input: {
       return {
         requestId: openExisting.id,
         status: openExisting.status,
+        sharerPlayerId: sharer.id,
       }
-    }
-
-    const activeForLobby = await tx.relaySession.findFirst({
-      where: {
-        lobbyId: lobby.id,
-        status: { in: ["APPROVED", "ACTIVE"] },
-        expiresAt: { gte: new Date() },
-      },
-      select: { id: true },
-    })
-    if (activeForLobby) {
-      throw new Error("relay_busy")
     }
 
     const created = await tx.relaySession.create({
@@ -492,11 +605,11 @@ export async function requestRelayAccess(input: {
         lobbyId: lobby.id,
         requesterPlayerId: requester.id,
         requesterUserId: requester.authUserId,
-        hostPlayerId: host.id,
-        hostUserId: host.authUserId,
+        hostPlayerId: sharer.id,
+        hostUserId: sharer.authUserId,
         status: "PENDING",
         maxMinutesGranted: 30,
-        expiresAt: addDays(new Date(), 1),
+        expiresAt: addDays(now, 1),
         baseRate: RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE,
       },
       select: { id: true, status: true },
@@ -505,6 +618,7 @@ export async function requestRelayAccess(input: {
     return {
       requestId: created.id,
       status: created.status,
+      sharerPlayerId: sharer.id,
     }
   })
 }
@@ -516,6 +630,7 @@ export async function decideRelayRequest(input: {
   maxMinutesGranted?: number
 }) {
   return prisma.$transaction(async (tx) => {
+    const now = new Date()
     const requestId = input.requestId.trim()
     const hostPlayerId = input.hostPlayerId.trim()
     if (!requestId || !hostPlayerId) {
@@ -537,23 +652,24 @@ export async function decideRelayRequest(input: {
     }
 
     if (input.approved) {
-      const host = relayRequest.hostUserId
-        ? await getRelayProfile(relayRequest.hostUserId)
-        : null
-      if (!host || host.totalAvailableHours <= 0) {
+      if (!relayRequest.hostUserId) {
+        throw new Error("host_no_credits")
+      }
+      const host = await getRelayProfileInTx(relayRequest.hostUserId, now, tx)
+      if (host.totalAvailableHours <= 0) {
         throw new Error("host_no_credits")
       }
 
-      const activeForLobby = await tx.relaySession.findFirst({
+      const activeForSharer = await tx.relaySession.count({
         where: {
           lobbyId: relayRequest.lobbyId,
+          hostPlayerId: relayRequest.hostPlayerId,
           status: { in: ["APPROVED", "ACTIVE"] },
-          expiresAt: { gte: new Date() },
+          expiresAt: { gte: now },
         },
-        select: { id: true },
       })
-      if (activeForLobby) {
-        throw new Error("relay_busy")
+      if (activeForSharer >= RELAY_MAX_PARTICIPANTS) {
+        throw new Error("relay_sharer_capacity_reached")
       }
     }
 
@@ -577,10 +693,152 @@ export async function decideRelayRequest(input: {
   })
 }
 
+export async function shareRelayHours(input: {
+  lobbyCode: string
+  sharerPlayerId: string
+  requesterPlayerIds: string[]
+  maxMinutesGranted?: number
+}) {
+  return prisma.$transaction(async (tx) => {
+    const now = new Date()
+    const code = input.lobbyCode.trim().toUpperCase()
+    const sharerPlayerId = input.sharerPlayerId.trim()
+    const requesterPlayerIds = [
+      ...new Set(input.requesterPlayerIds.map((id) => id.trim()).filter(Boolean)),
+    ]
+    if (!code || !sharerPlayerId || !requesterPlayerIds.length) {
+      throw new Error("invalid_request")
+    }
+
+    const lobby = await tx.lobby.findUnique({
+      where: { code },
+      select: { id: true, mode: true, status: true },
+    })
+    if (!lobby) {
+      throw new Error("not_found")
+    }
+    if (lobby.mode !== "VIRTUAL") {
+      throw new Error("relay_only_virtual")
+    }
+    if (lobby.status !== "IN_GAME") {
+      throw new Error("not_in_game")
+    }
+
+    const players = await tx.player.findMany({
+      where: { lobbyId: lobby.id, leftAt: null },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        name: true,
+        authUserId: true,
+      },
+    })
+
+    const sharer = players.find((player) => player.id === sharerPlayerId)
+    if (!sharer || !sharer.authUserId) {
+      throw new Error("sharer_not_eligible")
+    }
+
+    const sharerSummary = await getRelayProfileInTx(sharer.authUserId, now, tx)
+    if (sharerSummary.totalAvailableHours <= 0) {
+      throw new Error("host_no_credits")
+    }
+
+    const activeRelayCount = await tx.relaySession.count({
+      where: {
+        lobbyId: lobby.id,
+        hostPlayerId: sharer.id,
+        status: { in: ["APPROVED", "ACTIVE"] },
+        expiresAt: { gte: now },
+      },
+    })
+
+    let availableSlots = Math.max(0, RELAY_MAX_PARTICIPANTS - activeRelayCount)
+    if (availableSlots <= 0) {
+      throw new Error("relay_sharer_capacity_reached")
+    }
+
+    const approved: string[] = []
+    const skipped: Array<{ playerId: string; reason: string }> = []
+    const maxMinutesGranted = input.maxMinutesGranted
+      ? Math.max(5, Math.min(120, Math.floor(input.maxMinutesGranted)))
+      : 30
+
+    for (const requesterPlayerId of requesterPlayerIds) {
+      if (requesterPlayerId === sharerPlayerId) {
+        skipped.push({ playerId: requesterPlayerId, reason: "cannot_share_to_self" })
+        continue
+      }
+
+      const requester = players.find((player) => player.id === requesterPlayerId)
+      if (!requester) {
+        skipped.push({ playerId: requesterPlayerId, reason: "requester_not_active" })
+        continue
+      }
+
+      const existing = await tx.relaySession.findFirst({
+        where: {
+          lobbyId: lobby.id,
+          requesterPlayerId,
+          hostPlayerId: sharer.id,
+          status: { in: ["PENDING", "APPROVED", "ACTIVE"] },
+          expiresAt: { gte: now },
+        },
+        orderBy: { createdAt: "desc" },
+      })
+
+      if (existing?.status === "APPROVED" || existing?.status === "ACTIVE") {
+        approved.push(requesterPlayerId)
+        continue
+      }
+
+      if (availableSlots <= 0) {
+        skipped.push({ playerId: requesterPlayerId, reason: "relay_sharer_capacity_reached" })
+        continue
+      }
+
+      if (existing?.status === "PENDING") {
+        await tx.relaySession.update({
+          where: { id: existing.id },
+          data: {
+            status: "APPROVED",
+            maxMinutesGranted,
+            note: "approved_by_sharer",
+          },
+        })
+      } else {
+        await tx.relaySession.create({
+          data: {
+            lobbyId: lobby.id,
+            requesterPlayerId,
+            requesterUserId: requester.authUserId,
+            hostPlayerId: sharer.id,
+            hostUserId: sharer.authUserId,
+            status: "APPROVED",
+            maxMinutesGranted,
+            expiresAt: addDays(now, 1),
+            baseRate: RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE,
+            note: "shared_by_sharer",
+          },
+        })
+      }
+
+      availableSlots -= 1
+      approved.push(requesterPlayerId)
+    }
+
+    return {
+      approvedPlayerIds: approved,
+      skipped,
+    }
+  })
+}
+
 export async function getRelayState(input: {
   lobbyCode: string
   playerId: string
 }) {
+  const now = new Date()
   const code = input.lobbyCode.trim().toUpperCase()
   const playerId = input.playerId.trim()
   if (!code || !playerId) {
@@ -600,45 +858,45 @@ export async function getRelayState(input: {
     orderBy: { createdAt: "asc" },
     select: { id: true, name: true, authUserId: true, isHost: true },
   })
-  const selfPlayer = players.find((player) => player.id === playerId)
-  if (!selfPlayer) {
+
+  const contexts = await buildRelayPlayerContexts(players)
+  const selfContext = contexts.find((player) => player.id === playerId)
+  if (!selfContext) {
     throw new Error("player_not_found")
   }
 
-  const hostPlayer = players.find((player) => player.id === lobby.hostPlayerId)
-  const hostUserId = hostPlayer?.authUserId ?? null
+  const hostPlayer = contexts.find((player) => player.id === lobby.hostPlayerId)
+  const hostSummary = hostPlayer?.summary ?? null
   const activeVideoParticipants = Math.min(players.length, RELAY_MAX_PARTICIPANTS)
   const burnRatePerMinute = roundHours(
     activeVideoParticipants * RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
   )
 
-  const hostSummary = hostUserId ? await getRelayProfile(hostUserId) : null
-  const selfSummary = selfPlayer.authUserId
-    ? await getRelayProfile(selfPlayer.authUserId)
-    : null
+  const selfSummary = selfContext.summary
 
   const activeSession = await prisma.relaySession.findFirst({
     where: {
       lobbyId: lobby.id,
       status: { in: ["APPROVED", "ACTIVE"] },
-      expiresAt: { gte: new Date() },
+      expiresAt: { gte: now },
     },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
       status: true,
       requesterPlayerId: true,
+      hostPlayerId: true,
       maxMinutesGranted: true,
       startedAt: true,
       note: true,
     },
   })
 
-  const pendingSession = await prisma.relaySession.findFirst({
+  const pendingSessionGlobal = await prisma.relaySession.findFirst({
     where: {
       lobbyId: lobby.id,
       status: "PENDING",
-      expiresAt: { gte: new Date() },
+      expiresAt: { gte: now },
     },
     orderBy: { createdAt: "desc" },
     select: {
@@ -647,24 +905,124 @@ export async function getRelayState(input: {
     },
   })
 
-  const pendingRequester = pendingSession
-    ? players.find((player) => player.id === pendingSession.requesterPlayerId)
+  const pendingRequester = pendingSessionGlobal
+    ? players.find((player) => player.id === pendingSessionGlobal.requesterPlayerId)
     : null
 
-  const canEnableRelaySelf = Boolean(
-    selfSummary && selfSummary.totalAvailableHours > 0
+  const sharers = contexts
+    .filter(
+      (player) =>
+        player.id !== selfContext.id &&
+        Boolean(player.authUserId) &&
+        player.totalAvailableHours > 0
+    )
+    .map((player) => ({
+      playerId: player.id,
+      name: player.name,
+      planType: player.planType,
+      availableHours: roundHours(player.totalAvailableHours),
+    }))
+
+  const pendingForViewer = await prisma.relaySession.findMany({
+    where: {
+      lobbyId: lobby.id,
+      hostPlayerId: selfContext.id,
+      status: "PENDING",
+      expiresAt: { gte: now },
+    },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      requesterPlayerId: true,
+    },
+  })
+
+  const incomingRelayRequests = pendingForViewer
+    .map((request) => {
+      const requester = players.find(
+        (player) => player.id === request.requesterPlayerId
+      )
+      if (!requester) {
+        return null
+      }
+      return {
+        requestId: request.id,
+        requesterPlayerId: request.requesterPlayerId,
+        requesterName: requester.name,
+        estimatedBurnRatePerMinute: burnRatePerMinute,
+      }
+    })
+    .filter(
+      (
+        request
+      ): request is {
+        requestId: string
+        requesterPlayerId: string
+        requesterName: string
+        estimatedBurnRatePerMinute: number
+      } => request !== null
+    )
+
+  const activeOrApprovedForSelf = await prisma.relaySession.findFirst({
+    where: {
+      lobbyId: lobby.id,
+      requesterPlayerId: selfContext.id,
+      status: { in: ["APPROVED", "ACTIVE"] },
+      expiresAt: { gte: now },
+    },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      hostPlayerId: true,
+      status: true,
+    },
+  })
+
+  const alreadySharedByViewer = new Set(
+    (
+      await prisma.relaySession.findMany({
+        where: {
+          lobbyId: lobby.id,
+          hostPlayerId: selfContext.id,
+          status: { in: ["APPROVED", "ACTIVE"] },
+          expiresAt: { gte: now },
+        },
+        select: { requesterPlayerId: true },
+      })
+    ).map((session) => session.requesterPlayerId)
   )
 
-  const hostHasCredits = Boolean(hostSummary && hostSummary.totalAvailableHours > 0)
-  const canRequestRelayFromHost =
+  const canEnableRelaySelf = Boolean(
+    (selfSummary && selfSummary.totalAvailableHours > 0) || activeOrApprovedForSelf
+  )
+  const canShareRelay = Boolean(selfSummary && selfSummary.totalAvailableHours > 0)
+
+  const canRequestRelayFromSharers =
     !canEnableRelaySelf &&
-    Boolean(hostUserId) &&
-    hostHasCredits &&
+    sharers.length > 0 &&
     lobby.mode === "VIRTUAL" &&
     lobby.status === "IN_GAME"
 
+  const shareCandidates = contexts
+    .filter((player) => player.id !== selfContext.id)
+    .filter((player) => player.totalAvailableHours <= 0)
+    .map((player) => ({
+      playerId: player.id,
+      name: player.name,
+      planType: player.planType,
+      hasOwnRelayHours: player.totalAvailableHours > 0,
+      alreadySharedByViewer: alreadySharedByViewer.has(player.id),
+    }))
+
+  const relayHasAnyCredits = contexts.some(
+    (player) => player.totalAvailableHours > 0
+  )
+  const activeRelaySharer = activeSession?.hostPlayerId
+    ? contexts.find((player) => player.id === activeSession.hostPlayerId) ?? null
+    : null
+  const relayHoursOwner = activeRelaySharer ?? hostPlayer ?? null
   const relayDisabledReason =
-    !hostHasCredits && !canEnableRelaySelf
+    !relayHasAnyCredits && !canEnableRelaySelf
       ? "no_credits"
       : lobby.mode !== "VIRTUAL"
         ? "relay_only_virtual"
@@ -676,30 +1034,37 @@ export async function getRelayState(input: {
       relayStatus: activeSession?.status ?? "NONE",
       activeVideoParticipants,
       burnRatePerMinute,
-      remainingHostHours: hostSummary?.totalAvailableHours ?? 0,
-      hostPlanType: hostSummary?.planType ?? "FREE",
+      remainingHostHours: relayHoursOwner?.totalAvailableHours ?? 0,
+      hostPlanType: relayHoursOwner?.planType ?? "FREE",
       relayDisabledReason,
       maxRelayParticipants: RELAY_MAX_PARTICIPANTS,
       activeRequesterPlayerId: activeSession?.requesterPlayerId ?? null,
       pendingRequest:
-        pendingSession && pendingRequester
+        pendingSessionGlobal && pendingRequester
           ? {
-              requestId: pendingSession.id,
-              requesterPlayerId: pendingSession.requesterPlayerId,
+              requestId: pendingSessionGlobal.id,
+              requesterPlayerId: pendingSessionGlobal.requesterPlayerId,
               requesterName: pendingRequester.name,
               estimatedBurnRatePerMinute: burnRatePerMinute,
             }
           : null,
+      relaySharers: sharers,
     },
     viewer: {
       planType: selfSummary?.planType ?? "FREE",
       canEnableRelay: canEnableRelaySelf,
-      canRequestRelay: canRequestRelayFromHost,
+      canRequestRelay: canRequestRelayFromSharers,
+      canShareRelay,
       totalAvailableHours: selfSummary?.totalAvailableHours ?? 0,
       lowCreditWarning: Boolean(selfSummary?.lowCreditWarning),
       expiringSoonWarning: Boolean(selfSummary?.expiringHoursWithin7Days),
       expiringHoursWithin7Days: selfSummary?.expiringHoursWithin7Days ?? 0,
       expiringInDays: selfSummary?.expiringInDays ?? null,
+      activeRelaySessionId: activeOrApprovedForSelf?.id ?? null,
+      approvedByPlayerId: activeOrApprovedForSelf?.hostPlayerId ?? null,
+      requestableSharers: sharers,
+      shareCandidates,
+      incomingRelayRequests,
     },
   }
 }

@@ -11,7 +11,8 @@ type PricingCardProps = {
   loyaltyPrice?: string
   features: string[]
   ctaLabel: string
-  ctaHref: string
+  ctaHref?: string
+  onCtaClick?: () => void
   ctaVariant?: "primary" | "secondary"
   badge?: string
   featured?: boolean
@@ -26,6 +27,7 @@ function PricingCard({
   features,
   ctaLabel,
   ctaHref,
+  onCtaClick,
   ctaVariant = "primary",
   badge,
   featured = false,
@@ -81,13 +83,22 @@ function PricingCard({
       </ul>
 
       <div className="mt-auto pt-2">
-        <CtaButton asChild className="w-full">
-          <Link href={ctaHref}>{ctaLabel}</Link>
-        </CtaButton>
+        {onCtaClick ? (
+          <CtaButton type="button" className="w-full" onClick={onCtaClick}>
+            {ctaLabel}
+          </CtaButton>
+        ) : ctaHref ? (
+          <CtaButton asChild className="w-full">
+            <Link href={ctaHref}>{ctaLabel}</Link>
+          </CtaButton>
+        ) : (
+          <CtaButton type="button" className="w-full" disabled>
+            {ctaLabel}
+          </CtaButton>
+        )}
       </div>
     </article>
   )
 }
 
 export { PricingCard }
-

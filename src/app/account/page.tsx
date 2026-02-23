@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
+import { RelayPurchaseOverlay } from "@/components/payments/relay-purchase-overlay"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 type AccountPhoto = {
@@ -36,6 +37,17 @@ type RelayProfile = {
   expiringInDays: number | null
 }
 
+type BillingSubscriptionSummary = {
+  stripeSubscriptionId: string
+  stripePriceId: string
+  planType: "FREE" | "CORE" | "PRO"
+  status: string
+  currentPeriodStart: string | null
+  currentPeriodEnd: string | null
+  cancelAtPeriodEnd: boolean
+  isStripeManaged: boolean
+}
+
 export default function AccountPage() {
   const router = useRouter()
   const [session, setSession] = React.useState<Session | null>(null)
@@ -49,6 +61,12 @@ export default function AccountPage() {
   const [relayProfile, setRelayProfile] = React.useState<RelayProfile | null>(
     null
   )
+  const [subscriptionSummary, setSubscriptionSummary] =
+    React.useState<BillingSubscriptionSummary | null>(null)
+  const [hasActiveSubscription, setHasActiveSubscription] =
+    React.useState(false)
+  const [isPurchaseOverlayOpen, setIsPurchaseOverlayOpen] =
+    React.useState(false)
   const [relayError, setRelayError] = React.useState("")
 
   const accessToken = session?.access_token ?? ""
@@ -119,27 +137,45 @@ export default function AccountPage() {
   const fetchRelayProfile = React.useCallback(async () => {
     if (!accessToken) {
       setRelayProfile(null)
+      setSubscriptionSummary(null)
+      setHasActiveSubscription(false)
       setRelayError("")
       return
     }
 
     try {
-      const response = await fetch("/api/account/relay-profile", {
+      const response = await fetch("/api/payments/subscription", {
         headers: {
           Authorization: `Bearer ${accessToken}`,
         },
+        cache: "no-store",
       })
-      const payload = await response.json().catch(() => ({}))
+      const payload = (await response.json().catch(() => ({}))) as {
+        relayProfile?: RelayProfile
+        subscription?: BillingSubscriptionSummary | null
+        error?: string
+      }
       if (!response.ok) {
         setRelayError(payload?.error ?? "Unable to load relay profile.")
         setRelayProfile(null)
+        setSubscriptionSummary(null)
+        setHasActiveSubscription(false)
         return
       }
-      setRelayProfile(payload?.profile ?? null)
+      const subscriptionStatus = payload.subscription?.status?.toUpperCase() ?? ""
+      setRelayProfile(payload?.relayProfile ?? null)
+      setSubscriptionSummary(payload?.subscription ?? null)
+      setHasActiveSubscription(
+        Boolean(payload?.subscription) &&
+          subscriptionStatus !== "CANCELED" &&
+          subscriptionStatus !== "UNPAID"
+      )
       setRelayError("")
     } catch {
       setRelayError("Unable to load relay profile.")
       setRelayProfile(null)
+      setSubscriptionSummary(null)
+      setHasActiveSubscription(false)
     }
   }, [accessToken])
 
@@ -237,6 +273,22 @@ export default function AccountPage() {
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <RelayPurchaseOverlay
+          open={isPurchaseOverlayOpen}
+          originContext="account"
+          originPath="/account"
+          isAuthenticated={Boolean(session)}
+          accessToken={accessToken}
+          currentPlanType={relayProfile?.planType ?? "FREE"}
+          hasActiveSubscription={hasActiveSubscription}
+          onClose={() => setIsPurchaseOverlayOpen(false)}
+          onRequireSignIn={() => {
+            router.push(loginHref)
+          }}
+          onCompleted={async () => {
+            await fetchRelayProfile()
+          }}
+        />
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             Account
@@ -316,7 +368,7 @@ export default function AccountPage() {
                   Plan and banked relay hours for virtual fallback.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2 text-sm text-black/80">
+              <CardContent className="space-y-3 text-sm text-black/80">
                 {relayProfile ? (
                   <>
                     <p>
@@ -346,6 +398,14 @@ export default function AccountPage() {
                         {relayProfile.expiringInDays ?? "<7"} days.
                       </p>
                     ) : null}
+                    {subscriptionSummary ? (
+                      <p className="rounded-xl border-2 border-black bg-lightgray px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]">
+                        Stripe status: {subscriptionSummary.status}
+                        {subscriptionSummary.cancelAtPeriodEnd
+                          ? " (ends at period end)"
+                          : ""}
+                      </p>
+                    ) : null}
                   </>
                 ) : (
                   <p className="text-sm text-black/70">No relay plan yet.</p>
@@ -353,6 +413,15 @@ export default function AccountPage() {
                 {relayError ? (
                   <p className="text-sm font-semibold text-black">{relayError}</p>
                 ) : null}
+                <PrimaryButton
+                  type="button"
+                  className="w-full"
+                  onClick={() => setIsPurchaseOverlayOpen(true)}
+                >
+                  {hasActiveSubscription
+                    ? "Manage Subscription"
+                    : "Subscribe / Buy Relay Hours"}
+                </PrimaryButton>
               </CardContent>
             </Card>
 

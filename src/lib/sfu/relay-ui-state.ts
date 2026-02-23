@@ -44,7 +44,7 @@ export function createRelayUiController(): RelayUiController {
       state = {
         ...state,
         status: "CAN_REQUEST",
-        bannerText: "Direct connection failed. Request relay access from host?",
+        bannerText: "Direct connection failed. Request relay access from a sharer?",
         requestButtonEnabled: true,
       }
       return state
@@ -99,4 +99,3 @@ export function createRelayUiController(): RelayUiController {
     },
   }
 }
-

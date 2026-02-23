@@ -43,6 +43,35 @@ enum RelaySessionStatus {
   ENDED
 }
 
+enum BillingCheckoutKind {
+  SUBSCRIPTION
+  CREDIT_PACK
+}
+
+enum CreditPackType {
+  STARTER
+  STANDARD
+  PARTY
+}
+
+enum BillingCheckoutStatus {
+  CREATED
+  COMPLETED
+  EXPIRED
+  FAILED
+}
+
+enum BillingSubscriptionStatus {
+  INCOMPLETE
+  INCOMPLETE_EXPIRED
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  UNPAID
+  PAUSED
+}
+
 model Lobby {
   id        String      @id @default(cuid())
   code      String      @unique @db.VarChar(6)
@@ -110,6 +139,8 @@ model UserRelayProfile {
   bankedHours      Float    @default(0)
   bankExpiryDate   DateTime?
   loyaltyActive    Boolean  @default(false)
+  isStripeManaged  Boolean  @default(false)
+  stripeSubscriptionStatus BillingSubscriptionStatus?
   lastRenewalDate  DateTime @default(now())
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -117,6 +148,9 @@ model UserRelayProfile {
   buckets RelayHourBucket[]
   hostedRelaySessions    RelaySession[] @relation("RelayHost")
   requestedRelaySessions RelaySession[] @relation("RelayRequester")
+  billingCustomer        BillingCustomer?
+  billingSubscriptions   BillingSubscription[]
+  billingCheckoutSessions BillingCheckoutSession[]
 }
 
 model RelayHourBucket {
@@ -159,4 +193,62 @@ model RelaySession {
   @@index([lobbyId, status])
   @@index([hostUserId, status])
   @@index([requesterPlayerId, status])
+}
+
+model BillingCustomer {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  stripeCustomerId String   @unique
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  userRelayProfile UserRelayProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+}
+
+model BillingSubscription {
+  id                   String                    @id @default(cuid())
+  userId               String
+  stripeSubscriptionId String                    @unique
+  stripePriceId        String
+  planType             PlanType
+  status               BillingSubscriptionStatus
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean                   @default(false)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  userRelayProfile UserRelayProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, status])
+}
+
+model BillingCheckoutSession {
+  id                       String                @id @default(cuid())
+  stripeCheckoutSessionId  String                @unique
+  userId                   String
+  kind                     BillingCheckoutKind
+  planType                 PlanType?
+  creditPack               CreditPackType?
+  status                   BillingCheckoutStatus @default(CREATED)
+  processedAt              DateTime?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+
+  userRelayProfile UserRelayProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, kind, status])
+}
+
+model StripeWebhookEvent {
+  id           String   @id @default(cuid())
+  eventId      String   @unique
+  eventType    String
+  status       String   @default("RECEIVED")
+  errorMessage String?
+  processedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([eventType, status])
 }

@@ -19,6 +19,16 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (process.env.ENABLE_MANUAL_RELAY_PROFILE_MUTATIONS !== "true") {
+    return NextResponse.json(
+      {
+        error:
+          "Manual relay profile mutations are disabled. Use Stripe checkout endpoints.",
+      },
+      { status: 403 }
+    )
+  }
+
   const { user, error } = await getAuthUser(request)
   if (!user || error) {
     return NextResponse.json({ error: error ?? "Unauthorized." }, { status: 401 })
@@ -43,4 +53,3 @@ export async function POST(request: Request) {
     )
   }
 }
-

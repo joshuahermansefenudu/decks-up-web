@@ -1,7 +1,21 @@
+"use client"
+
 import Link from "next/link"
+import * as React from "react"
+import type { Session } from "@supabase/supabase-js"
 
 import { PricingCard } from "@/components/pricing/pricing-card"
+import { RelayPurchaseOverlay } from "@/components/payments/relay-purchase-overlay"
 import { PrimaryButton } from "@/components/ui/primary-button"
+import { supabaseBrowser } from "@/lib/supabase-browser"
+
+type RelayProfileSummary = {
+  planType: "FREE" | "CORE" | "PRO"
+}
+
+type SubscriptionSummary = {
+  status?: string
+}
 
 const mainPlans = [
   {
@@ -31,12 +45,12 @@ const mainPlans = [
       "Discounted renewal if hours are banked",
     ],
     ctaLabel: "Upgrade to Core",
-    ctaHref: "/account",
     ctaVariant: "primary" as const,
     badge: "Most Popular",
     featured: true,
     loyaltyTooltip:
       "Loyalty pricing remains active until your banked hours reach zero.",
+    planType: "CORE" as const,
   },
   {
     title: "Pro - Power Host",
@@ -52,8 +66,8 @@ const mainPlans = [
       "Loyalty discount applies",
     ],
     ctaLabel: "Upgrade to Pro",
-    ctaHref: "/account",
     ctaVariant: "primary" as const,
+    planType: "PRO" as const,
   },
 ]
 
@@ -61,35 +75,122 @@ const creditPacks = [
   {
     title: "Starter Pack",
     price: "$3.49",
-    features: [
-      "3 Relay Hours",
-      "Shareable in-game",
-      "Expires in 3 months",
-    ],
+    features: ["3 Relay Hours", "Shareable in-game", "Expires in 3 months"],
+    creditPack: "STARTER" as const,
   },
   {
     title: "Standard Pack",
     price: "$6.99",
-    features: [
-      "7 Relay Hours",
-      "Shareable",
-      "Expires in 3 months",
-    ],
+    features: ["7 Relay Hours", "Shareable", "Expires in 3 months"],
+    creditPack: "STANDARD" as const,
   },
   {
     title: "Party Pack",
     price: "$12.99",
-    features: [
-      "15 Relay Hours",
-      "Shareable",
-      "Expires in 3 months",
-    ],
+    features: ["15 Relay Hours", "Shareable", "Expires in 3 months"],
+    creditPack: "PARTY" as const,
   },
 ]
 
 export default function PricingPage() {
+  const [session, setSession] = React.useState<Session | null>(null)
+  const [isPurchaseOverlayOpen, setIsPurchaseOverlayOpen] = React.useState(false)
+  const [relayPlanType, setRelayPlanType] = React.useState<"FREE" | "CORE" | "PRO">(
+    "FREE"
+  )
+  const [hasActiveSubscription, setHasActiveSubscription] = React.useState(false)
+
+  const accessToken = session?.access_token ?? ""
+
+  const fetchBillingSummary = React.useCallback(async () => {
+    if (!accessToken) {
+      setRelayPlanType("FREE")
+      setHasActiveSubscription(false)
+      return
+    }
+
+    try {
+      const response = await fetch("/api/payments/subscription", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        cache: "no-store",
+      })
+      const payload = (await response.json().catch(() => ({}))) as {
+        relayProfile?: RelayProfileSummary
+        subscription?: SubscriptionSummary | null
+      }
+
+      if (!response.ok) {
+        setRelayPlanType("FREE")
+        setHasActiveSubscription(false)
+        return
+      }
+
+      const status = payload.subscription?.status?.toUpperCase() ?? ""
+      setHasActiveSubscription(
+        Boolean(payload.subscription) && status !== "CANCELED" && status !== "UNPAID"
+      )
+      setRelayPlanType(payload.relayProfile?.planType ?? "FREE")
+    } catch {
+      setRelayPlanType("FREE")
+      setHasActiveSubscription(false)
+    }
+  }, [accessToken])
+
+  React.useEffect(() => {
+    let mounted = true
+
+    void supabaseBrowser.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) {
+          return
+        }
+        setSession(data.session ?? null)
+      })
+      .catch(() => {
+        if (!mounted) {
+          return
+        }
+        setSession(null)
+      })
+
+    const { data: subscription } = supabaseBrowser.auth.onAuthStateChange(
+      (_event, nextSession) => {
+        setSession(nextSession)
+      }
+    )
+
+    return () => {
+      mounted = false
+      subscription.subscription.unsubscribe()
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void fetchBillingSummary()
+  }, [fetchBillingSummary])
+
   return (
     <main className="mx-auto w-full max-w-6xl px-4 pb-14 pt-8">
+      <RelayPurchaseOverlay
+        open={isPurchaseOverlayOpen}
+        originContext="pricing"
+        originPath="/pricing"
+        isAuthenticated={Boolean(session)}
+        accessToken={accessToken}
+        currentPlanType={relayPlanType}
+        hasActiveSubscription={hasActiveSubscription}
+        onClose={() => setIsPurchaseOverlayOpen(false)}
+        onRequireSignIn={() => {
+          window.location.href = "/account/login?next=%2Fpricing"
+        }}
+        onCompleted={async () => {
+          await fetchBillingSummary()
+        }}
+      />
+
       <div className="space-y-12">
         <section className="rounded-3xl border-2 border-black bg-offwhite p-6 shadow-[8px_8px_0_#000] sm:p-8">
           <div className="mx-auto max-w-3xl space-y-4 text-center">
@@ -103,6 +204,11 @@ export default function PricingPage() {
             <PrimaryButton asChild className="min-w-56">
               <Link href="/">Start Playing Free</Link>
             </PrimaryButton>
+            {!session ? (
+              <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+                Purchases require login. Guest users can still play free P2P.
+              </p>
+            ) : null}
           </div>
         </section>
 
@@ -123,6 +229,13 @@ export default function PricingPage() {
                 features={plan.features}
                 ctaLabel={plan.ctaLabel}
                 ctaHref={plan.ctaHref}
+                onCtaClick={
+                  "planType" in plan
+                    ? () => {
+                        setIsPurchaseOverlayOpen(true)
+                      }
+                    : undefined
+                }
                 ctaVariant={plan.ctaVariant}
                 badge={plan.badge}
                 featured={plan.featured}
@@ -153,7 +266,9 @@ export default function PricingPage() {
                 price={pack.price}
                 features={pack.features}
                 ctaLabel="Buy Credits"
-                ctaHref="/account"
+                onCtaClick={() => {
+                  setIsPurchaseOverlayOpen(true)
+                }}
               />
             ))}
           </div>

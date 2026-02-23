@@ -16,17 +16,45 @@ type RelayRoomState = {
     requesterName: string
     estimatedBurnRatePerMinute: number
   } | null
+  relaySharers?: Array<{
+    playerId: string
+    name: string
+    planType: PlanType
+    availableHours: number
+  }>
 }
 
 type RelayViewerState = {
   planType: PlanType
   canEnableRelay: boolean
   canRequestRelay: boolean
+  canShareRelay?: boolean
   totalAvailableHours: number
   lowCreditWarning: boolean
   expiringSoonWarning: boolean
   expiringHoursWithin7Days: number
   expiringInDays: number | null
+  activeRelaySessionId?: string | null
+  approvedByPlayerId?: string | null
+  requestableSharers?: Array<{
+    playerId: string
+    name: string
+    planType: PlanType
+    availableHours: number
+  }>
+  shareCandidates?: Array<{
+    playerId: string
+    name: string
+    planType: PlanType
+    hasOwnRelayHours: boolean
+    alreadySharedByViewer: boolean
+  }>
+  incomingRelayRequests?: Array<{
+    requestId: string
+    requesterPlayerId: string
+    requesterName: string
+    estimatedBurnRatePerMinute: number
+  }>
 }
 
 type RelayStatusPanelProps = {

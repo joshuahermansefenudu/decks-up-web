@@ -18,6 +18,8 @@ import {
   type RelayViewerState,
 } from "@/components/game/relay-status-panel"
 import { RelayRequestModal } from "@/components/game/relay-request-modal"
+import { RelayShareModal } from "@/components/game/relay-share-modal"
+import { RelayPurchaseOverlay } from "@/components/payments/relay-purchase-overlay"
 import {
   createSFUConnection,
   detectRelayUsage as detectSfuRelayUsage,
@@ -291,6 +293,24 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     React.useState(false)
   const [isRelayRequestSubmitting, setIsRelayRequestSubmitting] =
     React.useState(false)
+  const [isRelayShareSubmitting, setIsRelayShareSubmitting] =
+    React.useState(false)
+  const [isRelayShareModalOpen, setIsRelayShareModalOpen] =
+    React.useState(false)
+  const [isRelayPurchaseModalOpen, setIsRelayPurchaseModalOpen] =
+    React.useState(false)
+  const [isSignedIn, setIsSignedIn] = React.useState(false)
+  const [authAccessToken, setAuthAccessToken] = React.useState("")
+  const [billingPlanType, setBillingPlanType] = React.useState<
+    "FREE" | "CORE" | "PRO"
+  >("FREE")
+  const [hasActiveStripeSubscription, setHasActiveStripeSubscription] =
+    React.useState(false)
+  const [selectedRelayShareIds, setSelectedRelayShareIds] = React.useState<
+    string[]
+  >([])
+  const [selectedSharerPlayerId, setSelectedSharerPlayerId] =
+    React.useState("")
   const [mediaError, setMediaError] = React.useState("")
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
   const [videoErrorCode, setVideoErrorCode] = React.useState("")
@@ -340,6 +360,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const sfuRelayWatcherStopRef = React.useRef<(() => void) | null>(null)
   const streamPlayerMapRef = React.useRef<Map<string, string>>(new Map())
   const relayRequestSentRef = React.useRef(false)
+  const relaySharePromptedRef = React.useRef(false)
   const relayTickTimerRef = React.useRef<number | null>(null)
   const p2pIceServers = React.useMemo<RTCIceServer[]>(
     () => [
@@ -365,21 +386,30 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     : requestedTransport === "relay" && hasTurnServer
       ? "relay"
       : "p2p"
-  const pendingRelayRequest = relayState?.room.pendingRequest ?? null
   const relayViewer = relayState?.viewer ?? null
   const relayRoom = relayState?.room ?? null
+  const requestableSharers = relayViewer?.requestableSharers ?? []
+  const shareCandidates = relayViewer?.shareCandidates ?? []
+  const incomingRelayRequests = relayViewer?.incomingRelayRequests ?? []
+  const pendingRelayRequest = incomingRelayRequests[0] ?? null
+  const canSelfEnableRelay = Boolean(relayViewer?.canEnableRelay)
+  const canRequestRelayFromOthers = Boolean(
+    relayViewer?.canRequestRelay && requestableSharers.length > 0
+  )
+  const canShareRelayHours = Boolean(relayViewer?.canShareRelay)
   const relayActionsAvailable =
     preferredTransport === "relay" ||
-    Boolean(relayViewer?.canEnableRelay || relayViewer?.canRequestRelay)
+    canSelfEnableRelay ||
+    canRequestRelayFromOthers ||
+    canShareRelayHours
   const isTurnSwitchDisabled =
-    isSfuMode
-      ? !turnToggleUnlocked || !relayActionsAvailable
-      : (requestedTransport === "p2p" && !turnToggleUnlocked) ||
-        !relayActionsAvailable
+    requestedTransport === "relay"
+      ? false
+      : isSfuMode
+        ? !turnToggleUnlocked || !canSelfEnableRelay
+        : (requestedTransport === "p2p" && !turnToggleUnlocked) ||
+          !relayActionsAvailable
   const isActive = state.lobby.activePlayerId === playerId
-  const hostPlayerId =
-    state.players.find((participant) => participant.isHost)?.id ?? ""
-  const isHostPlayer = Boolean(playerId && playerId === hostPlayerId)
   const showNetworkDebug =
     process.env.NODE_ENV === "development" ||
     process.env.NEXT_PUBLIC_SHOW_NETWORK_DEBUG === "true"
@@ -387,6 +417,41 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   React.useEffect(() => {
     signalStatusRef.current = signalStatus
   }, [signalStatus])
+
+  React.useEffect(() => {
+    let mounted = true
+
+    void supabaseBrowser.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) {
+          return
+        }
+        const token = data.session?.access_token ?? ""
+        setIsSignedIn(Boolean(token))
+        setAuthAccessToken(token)
+      })
+      .catch(() => {
+        if (!mounted) {
+          return
+        }
+        setIsSignedIn(false)
+        setAuthAccessToken("")
+      })
+
+    const { data: subscription } = supabaseBrowser.auth.onAuthStateChange(
+      (_event, session) => {
+        const token = session?.access_token ?? ""
+        setIsSignedIn(Boolean(token))
+        setAuthAccessToken(token)
+      }
+    )
+
+    return () => {
+      mounted = false
+      subscription.subscription.unsubscribe()
+    }
+  }, [])
 
   React.useEffect(() => {
     if (!isVirtual) {
@@ -463,52 +528,177 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     }
   }, [isVirtual, playerId, state.lobby.code, state.lobby.status])
 
-  const requestRelayAccess = React.useCallback(async () => {
-    if (!playerId) {
+  const fetchBillingSummary = React.useCallback(async () => {
+    if (!authAccessToken) {
+      setBillingPlanType("FREE")
+      setHasActiveStripeSubscription(false)
       return
     }
 
-    setIsRelayRequestSubmitting(true)
     try {
-      const response = await fetch("/api/relay/request", {
+      const response = await fetch("/api/payments/subscription", {
+        headers: {
+          Authorization: `Bearer ${authAccessToken}`,
+        },
+        cache: "no-store",
+      })
+      const payload = (await response.json().catch(() => ({}))) as {
+        subscription?: {
+          planType?: "FREE" | "CORE" | "PRO"
+          status?: string
+        } | null
+        relayProfile?: {
+          planType?: "FREE" | "CORE" | "PRO"
+        }
+      }
+      if (!response.ok) {
+        setBillingPlanType("FREE")
+        setHasActiveStripeSubscription(false)
+        return
+      }
+
+      const subscriptionStatus = payload.subscription?.status?.toUpperCase() ?? ""
+      const hasActiveSubscription =
+        Boolean(payload.subscription) &&
+        subscriptionStatus !== "CANCELED" &&
+        subscriptionStatus !== "UNPAID"
+
+      setHasActiveStripeSubscription(hasActiveSubscription)
+      setBillingPlanType(
+        payload.relayProfile?.planType ??
+          payload.subscription?.planType ??
+          "FREE"
+      )
+    } catch {
+      setBillingPlanType("FREE")
+      setHasActiveStripeSubscription(false)
+    }
+  }, [authAccessToken])
+
+  React.useEffect(() => {
+    void fetchBillingSummary()
+  }, [fetchBillingSummary])
+
+  const requestRelayAccess = React.useCallback(
+    async (sharerPlayerId?: string) => {
+      if (!playerId) {
+        return
+      }
+
+      const requestedSharer =
+        sharerPlayerId?.trim() || requestableSharers[0]?.playerId || ""
+      if (!requestedSharer) {
+        setWebrtcStatus("No eligible relay sharer is available in this room.")
+        return
+      }
+
+      setIsRelayRequestSubmitting(true)
+      try {
+        const response = await fetch("/api/relay/request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            lobbyCode: state.lobby.code,
+            requesterPlayerId: playerId,
+            sharerPlayerId: requestedSharer,
+          }),
+        })
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string
+          requestId?: string
+        }
+        if (!response.ok) {
+          relayRequestSentRef.current = false
+          setRelayFailure(
+            payload.error ?? "Unable to request relay access.",
+            "VFD_RELAY_REQUEST_FAILED"
+          )
+          return
+        }
+
+        const sharerName =
+          requestableSharers.find((player) => player.playerId === requestedSharer)
+            ?.name ?? "a sharer"
+        setWebrtcStatus(`Relay request sent to ${sharerName}. Waiting for decision...`)
+        relayRequestSentRef.current = true
+        if (isSfuMode && payload.requestId) {
+          void enableRelayForParticipant(playerId, payload.requestId).catch(() => {
+            // Keep polling relay state even if signaling helper fails.
+          })
+        }
+        await fetchRelayState()
+      } catch {
+        relayRequestSentRef.current = false
+        setRelayFailure(
+          "Unable to request relay access.",
+          "VFD_RELAY_REQUEST_FAILED"
+        )
+      } finally {
+        setIsRelayRequestSubmitting(false)
+      }
+    },
+    [
+      fetchRelayState,
+      isSfuMode,
+      playerId,
+      requestableSharers,
+      setRelayFailure,
+      state.lobby.code,
+    ]
+  )
+
+  const shareRelayHours = React.useCallback(async () => {
+    if (!playerId || selectedRelayShareIds.length === 0) {
+      return
+    }
+
+    setIsRelayShareSubmitting(true)
+    try {
+      const response = await fetch("/api/relay/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           lobbyCode: state.lobby.code,
-          requesterPlayerId: playerId,
+          sharerPlayerId: playerId,
+          requesterPlayerIds: selectedRelayShareIds,
+          maxMinutesGranted: 30,
         }),
       })
       const payload = (await response.json().catch(() => ({}))) as {
         error?: string
-        requestId?: string
+        approvedPlayerIds?: string[]
       }
       if (!response.ok) {
-        relayRequestSentRef.current = false
         setRelayFailure(
-          payload.error ?? "Unable to request relay access.",
-          "VFD_RELAY_REQUEST_FAILED"
+          payload.error ?? "Unable to share relay hours.",
+          "VFD_RELAY_SHARE_FAILED"
         )
         return
       }
 
-      setWebrtcStatus("Relay request sent. Waiting for host decision...")
-      relayRequestSentRef.current = true
-      if (isSfuMode && payload.requestId) {
-        void enableRelayForParticipant(playerId, payload.requestId).catch(() => {
-          // Keep polling relay state even if signaling helper fails.
-        })
-      }
+      const approvedCount = payload.approvedPlayerIds?.length ?? 0
+      setWebrtcStatus(
+        approvedCount > 0
+          ? `Shared relay hours with ${approvedCount} player${approvedCount > 1 ? "s" : ""}.`
+          : "No players were added to relay sharing."
+      )
+      setIsRelayShareModalOpen(false)
       await fetchRelayState()
     } catch {
-      relayRequestSentRef.current = false
       setRelayFailure(
-        "Unable to request relay access.",
-        "VFD_RELAY_REQUEST_FAILED"
+        "Unable to share relay hours.",
+        "VFD_RELAY_SHARE_FAILED"
       )
     } finally {
-      setIsRelayRequestSubmitting(false)
+      setIsRelayShareSubmitting(false)
     }
-  }, [fetchRelayState, isSfuMode, playerId, setRelayFailure, state.lobby.code])
+  }, [
+    fetchRelayState,
+    playerId,
+    selectedRelayShareIds,
+    setRelayFailure,
+    state.lobby.code,
+  ])
 
   const submitRelayDecision = React.useCallback(
     async (approved: boolean) => {
@@ -723,14 +913,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }, [fetchRelayState, isVirtual, playerId, state.lobby.status])
 
   React.useEffect(() => {
-    if (!playerId || !relayRoom) {
+    if (!playerId || !relayRoom || !relayViewer) {
       return
     }
 
     if (
-      relayRoom.activeRequesterPlayerId === playerId &&
-      relayRoom.relayStatus !== "DENIED" &&
-      relayRoom.relayStatus !== "ENDED" &&
+      relayViewer.activeRelaySessionId &&
       requestedTransport !== "relay"
     ) {
       setRequestedTransport("relay")
@@ -748,7 +936,45 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       setIsVideoMuted(true)
       setWebrtcStatus("Relay disabled - no credits. Camera moved to audio-only.")
     }
-  }, [playerId, relayRoom, requestedTransport])
+  }, [playerId, relayRoom, relayViewer, requestedTransport])
+
+  React.useEffect(() => {
+    if (!requestableSharers.length) {
+      if (selectedSharerPlayerId) {
+        setSelectedSharerPlayerId("")
+      }
+      return
+    }
+
+    const hasSelected = requestableSharers.some(
+      (sharer) => sharer.playerId === selectedSharerPlayerId
+    )
+    if (!hasSelected) {
+      setSelectedSharerPlayerId(requestableSharers[0]?.playerId ?? "")
+    }
+  }, [requestableSharers, selectedSharerPlayerId])
+
+  React.useEffect(() => {
+    if (!turnToggleUnlocked) {
+      relaySharePromptedRef.current = false
+      setIsRelayShareModalOpen(false)
+      return
+    }
+
+    if (!canShareRelayHours || shareCandidates.length === 0) {
+      return
+    }
+
+    if (!relaySharePromptedRef.current) {
+      relaySharePromptedRef.current = true
+      setSelectedRelayShareIds(
+        shareCandidates
+          .filter((candidate) => !candidate.alreadySharedByViewer)
+          .map((candidate) => candidate.playerId)
+      )
+      setIsRelayShareModalOpen(true)
+    }
+  }, [canShareRelayHours, shareCandidates, turnToggleUnlocked])
 
   React.useEffect(() => {
     if (relayTickTimerRef.current) {
@@ -761,7 +987,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       isVirtual &&
       preferredTransport === "relay" &&
       isRelayUsageActive &&
-      relayRoom?.activeRequesterPlayerId === playerId
+      Boolean(relayViewer?.activeRelaySessionId)
 
     if (!shouldTick || !playerId) {
       return
@@ -822,8 +1048,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     isVirtual,
     playerId,
     preferredTransport,
-    relayRoom?.activeRequesterPlayerId,
     relayRoom?.maxRelayParticipants,
+    relayViewer?.activeRelaySessionId,
     state.lobby.code,
     state.players.length,
     setRelayFailure,
@@ -914,17 +1140,19 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         return
       }
 
-      if (relayViewer?.canEnableRelay) {
+      if (canSelfEnableRelay) {
         setRequestedTransport("relay")
         setWebrtcStatus("Enabling relay...")
         return
       }
 
-      if (relayViewer?.canRequestRelay) {
+      if (canRequestRelayFromOthers) {
         relayRequestSentRef.current = true
-        void requestRelayAccess()
+        void requestRelayAccess(selectedSharerPlayerId || undefined)
       } else {
-        setWebrtcStatus("Relay is unavailable for this account.")
+        setWebrtcStatus(
+          "Relay unavailable: subscribe, buy hours, or request sharing."
+        )
       }
       return
     }
@@ -936,13 +1164,14 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
     setRequestedTransport("p2p")
   }, [
+    canRequestRelayFromOthers,
+    canSelfEnableRelay,
     enableTurnMode,
     isSfuMode,
     playerId,
-    relayViewer?.canEnableRelay,
-    relayViewer?.canRequestRelay,
     requestRelayAccess,
     requestedTransport,
+    selectedSharerPlayerId,
     turnToggleUnlocked,
   ])
 
@@ -2463,30 +2692,88 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   if (isVirtual) {
     const controlsDisabled = !localStream || Boolean(mediaError)
     const relayModalOpen =
-      isHostPlayer &&
+      canShareRelayHours &&
       Boolean(pendingRelayRequest) &&
       pendingRelayRequest?.requesterPlayerId !== playerId
-    const showRequestRelayButton =
-      turnToggleUnlocked &&
-      !relayViewer?.canEnableRelay &&
-      Boolean(relayViewer?.canRequestRelay) &&
+    const hasShareCandidates = shareCandidates.length > 0
+    const showRequestRelayOptions =
+      !canSelfEnableRelay &&
+      canRequestRelayFromOthers &&
+      requestedTransport === "p2p"
+    const canSubmitRelayRequest = turnToggleUnlocked && showRequestRelayOptions
+    const showRelaySharePrompt =
+      canShareRelayHours &&
+      hasShareCandidates &&
+      requestedTransport === "p2p"
+    const showRelayUpgradePrompt =
+      !canSelfEnableRelay &&
+      !canShareRelayHours &&
       requestedTransport === "p2p"
     const relayButtonLabel =
-      relayViewer?.canEnableRelay || requestedTransport === "relay"
+      canSelfEnableRelay || requestedTransport === "relay"
         ? isSfuMode
           ? "Enable TURN fallback"
           : "Enable TURN fallback"
-        : "Request host relay"
+        : "Relay locked"
 
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-4 pb-10 pt-8">
+        <RelayPurchaseOverlay
+          open={isRelayPurchaseModalOpen}
+          originContext="game"
+          originPath={`/game/${encodeURIComponent(state.lobby.code)}?playerId=${
+            playerId ?? ""
+          }`}
+          isAuthenticated={isSignedIn}
+          accessToken={authAccessToken}
+          currentPlanType={billingPlanType}
+          hasActiveSubscription={hasActiveStripeSubscription}
+          onClose={() => {
+            setIsRelayPurchaseModalOpen(false)
+          }}
+          onRequireSignIn={() => {
+            setWebrtcStatus("Sign in is required to subscribe or buy relay hours.")
+          }}
+          onCompleted={async () => {
+            await Promise.all([fetchRelayState(), fetchState(), fetchBillingSummary()])
+            setWebrtcStatus("Relay purchase confirmed. Game state refreshed.")
+          }}
+        />
+        <RelayShareModal
+          open={isRelayShareModalOpen}
+          candidates={shareCandidates}
+          selectedPlayerIds={selectedRelayShareIds}
+          sharerHours={relayViewer?.totalAvailableHours ?? 0}
+          isSubmitting={isRelayShareSubmitting}
+          onClose={() => {
+            setIsRelayShareModalOpen(false)
+          }}
+          onTogglePlayer={(targetPlayerId) => {
+            setSelectedRelayShareIds((current) =>
+              current.includes(targetPlayerId)
+                ? current.filter((value) => value !== targetPlayerId)
+                : [...current, targetPlayerId]
+            )
+          }}
+          onSelectAll={() => {
+            setSelectedRelayShareIds(
+              shareCandidates.map((candidate) => candidate.playerId)
+            )
+          }}
+          onClear={() => {
+            setSelectedRelayShareIds([])
+          }}
+          onSubmit={() => {
+            void shareRelayHours()
+          }}
+        />
         <RelayRequestModal
           open={relayModalOpen}
           requesterName={pendingRelayRequest?.requesterName ?? "Player"}
           estimatedBurnRatePerMinute={
             pendingRelayRequest?.estimatedBurnRatePerMinute ?? 0
           }
-          remainingHostHours={relayRoom?.remainingHostHours ?? 0}
+          remainingHostHours={relayViewer?.totalAvailableHours ?? 0}
           isSubmitting={isRelayDecisionSubmitting}
           onApprove={() => {
             void submitRelayDecision(true)
@@ -2551,9 +2838,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               } disabled:cursor-not-allowed disabled:opacity-60`}
               title={
                 isTurnSwitchDisabled
-                  ? isSfuMode
-                    ? "Relay request unlocks after direct mode fails."
-                    : "TURN unlocks after a P2P failure."
+                  ? !turnToggleUnlocked
+                    ? isSfuMode
+                      ? "Relay controls unlock after direct mode fails."
+                      : "TURN unlocks after a P2P failure."
+                    : "Only players with relay hours can toggle relay directly."
                   : undefined
               }
             >
@@ -2569,16 +2858,46 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               {preferredTransport === "relay" ? "On" : "Off"}
             </span>
           </div>
-          {showRequestRelayButton ? (
+          {showRequestRelayOptions ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={selectedSharerPlayerId}
+                onChange={(event) => setSelectedSharerPlayerId(event.target.value)}
+                className="rounded-full border-2 border-black bg-offwhite px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+                disabled={!canSubmitRelayRequest}
+              >
+                {requestableSharers.map((sharer) => (
+                  <option key={sharer.playerId} value={sharer.playerId}>
+                    Request from {sharer.name}
+                  </option>
+                ))}
+              </select>
+              <PrimaryButton
+                type="button"
+                className="px-4 py-2 text-xs"
+                onClick={() => {
+                  void requestRelayAccess(selectedSharerPlayerId || undefined)
+                }}
+                disabled={isRelayRequestSubmitting || !canSubmitRelayRequest}
+              >
+                {isRelayRequestSubmitting ? "Requesting..." : "Request Relay Access"}
+              </PrimaryButton>
+            </div>
+          ) : null}
+          {showRelaySharePrompt ? (
             <PrimaryButton
               type="button"
               className="px-4 py-2 text-xs"
               onClick={() => {
-                void requestRelayAccess()
+                setSelectedRelayShareIds(
+                  shareCandidates
+                    .filter((candidate) => !candidate.alreadySharedByViewer)
+                    .map((candidate) => candidate.playerId)
+                )
+                setIsRelayShareModalOpen(true)
               }}
-              disabled={isRelayRequestSubmitting}
             >
-              {isRelayRequestSubmitting ? "Requesting..." : "Request Relay Access"}
+              Share Relay Hours
             </PrimaryButton>
           ) : null}
         </div>
@@ -2588,6 +2907,41 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           relayActive={isRelayUsageActive}
           isTurnUnlocked={turnToggleUnlocked}
         />
+        {showRelaySharePrompt ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 text-xs font-semibold uppercase tracking-wide text-black shadow-[3px_3px_0_#000]">
+            Some players do not have relay hours. Share your hours so they can
+            continue video if P2P fails.
+          </div>
+        ) : null}
+        {showRequestRelayOptions && !turnToggleUnlocked ? (
+          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 text-xs font-semibold uppercase tracking-wide text-black/80 shadow-[3px_3px_0_#000]">
+            Direct connection is active. Relay request unlocks only if P2P fails.
+          </div>
+        ) : null}
+        {showRelayUpgradePrompt ? (
+          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm text-black shadow-[3px_3px_0_#000]">
+            <p className="font-semibold">
+              You do not have relay hours yet.
+            </p>
+            <p className="mt-1 text-xs text-black/70">
+              Option 1: subscribe or buy relay hours.
+              {canRequestRelayFromOthers
+                ? " Option 2: request relay hours from players who have an active subscription."
+                : " No players in this room currently have relay hours to share."}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <PrimaryButton
+                type="button"
+                className="px-4 py-2 text-xs"
+                onClick={() => {
+                  setIsRelayPurchaseModalOpen(true)
+                }}
+              >
+                Subscribe / Buy Relay Hours
+              </PrimaryButton>
+            </div>
+          </div>
+        ) : null}
         {relayViewer?.lowCreditWarning ? (
           <div className="rounded-2xl border-2 border-black bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[3px_3px_0_#000]">
             Low Relay Hours - Upgrade or Buy Credits
@@ -2625,9 +2979,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         </div>
         {isTurnSwitchDisabled ? (
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            {isSfuMode
-              ? "Relay request unlocks after direct mode fails."
-              : "TURN switch unlocks after P2P fails."}
+            {!turnToggleUnlocked
+              ? isSfuMode
+                ? "Relay controls unlock after direct mode fails."
+                : "TURN switch unlocks after P2P fails."
+              : "Direct relay toggle requires your own relay hours."}
           </div>
         ) : null}
 
