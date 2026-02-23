@@ -5,17 +5,8 @@ import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
 import { PricingCard } from "@/components/pricing/pricing-card"
-import { RelayPurchaseOverlay } from "@/components/payments/relay-purchase-overlay"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { supabaseBrowser } from "@/lib/supabase-browser"
-
-type RelayProfileSummary = {
-  planType: "FREE" | "CORE" | "PRO"
-}
-
-type SubscriptionSummary = {
-  status?: string
-}
 
 const mainPlans = [
   {
@@ -94,49 +85,6 @@ const creditPacks = [
 
 export default function PricingPage() {
   const [session, setSession] = React.useState<Session | null>(null)
-  const [isPurchaseOverlayOpen, setIsPurchaseOverlayOpen] = React.useState(false)
-  const [relayPlanType, setRelayPlanType] = React.useState<"FREE" | "CORE" | "PRO">(
-    "FREE"
-  )
-  const [hasActiveSubscription, setHasActiveSubscription] = React.useState(false)
-
-  const accessToken = session?.access_token ?? ""
-
-  const fetchBillingSummary = React.useCallback(async () => {
-    if (!accessToken) {
-      setRelayPlanType("FREE")
-      setHasActiveSubscription(false)
-      return
-    }
-
-    try {
-      const response = await fetch("/api/payments/subscription", {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: "no-store",
-      })
-      const payload = (await response.json().catch(() => ({}))) as {
-        relayProfile?: RelayProfileSummary
-        subscription?: SubscriptionSummary | null
-      }
-
-      if (!response.ok) {
-        setRelayPlanType("FREE")
-        setHasActiveSubscription(false)
-        return
-      }
-
-      const status = payload.subscription?.status?.toUpperCase() ?? ""
-      setHasActiveSubscription(
-        Boolean(payload.subscription) && status !== "CANCELED" && status !== "UNPAID"
-      )
-      setRelayPlanType(payload.relayProfile?.planType ?? "FREE")
-    } catch {
-      setRelayPlanType("FREE")
-      setHasActiveSubscription(false)
-    }
-  }, [accessToken])
 
   React.useEffect(() => {
     let mounted = true
@@ -168,29 +116,8 @@ export default function PricingPage() {
     }
   }, [])
 
-  React.useEffect(() => {
-    void fetchBillingSummary()
-  }, [fetchBillingSummary])
-
   return (
     <main className="mx-auto w-full max-w-6xl px-4 pb-14 pt-8">
-      <RelayPurchaseOverlay
-        open={isPurchaseOverlayOpen}
-        originContext="pricing"
-        originPath="/pricing"
-        isAuthenticated={Boolean(session)}
-        accessToken={accessToken}
-        currentPlanType={relayPlanType}
-        hasActiveSubscription={hasActiveSubscription}
-        onClose={() => setIsPurchaseOverlayOpen(false)}
-        onRequireSignIn={() => {
-          window.location.href = "/account/login?next=%2Fpricing"
-        }}
-        onCompleted={async () => {
-          await fetchBillingSummary()
-        }}
-      />
-
       <div className="space-y-12">
         <section className="rounded-3xl border-2 border-black bg-offwhite p-6 shadow-[8px_8px_0_#000] sm:p-8">
           <div className="mx-auto max-w-3xl space-y-4 text-center">
@@ -209,6 +136,9 @@ export default function PricingPage() {
                 Purchases require login. Guest users can still play free P2P.
               </p>
             ) : null}
+            <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+              Relay purchases are completed in-game.
+            </p>
           </div>
         </section>
 
@@ -228,14 +158,7 @@ export default function PricingPage() {
                 loyaltyPrice={plan.loyaltyPrice}
                 features={plan.features}
                 ctaLabel={plan.ctaLabel}
-                ctaHref={plan.ctaHref}
-                onCtaClick={
-                  "planType" in plan
-                    ? () => {
-                        setIsPurchaseOverlayOpen(true)
-                      }
-                    : undefined
-                }
+                ctaHref={"planType" in plan ? "/create" : plan.ctaHref}
                 ctaVariant={plan.ctaVariant}
                 badge={plan.badge}
                 featured={plan.featured}
@@ -266,9 +189,7 @@ export default function PricingPage() {
                 price={pack.price}
                 features={pack.features}
                 ctaLabel="Buy Credits"
-                onCtaClick={() => {
-                  setIsPurchaseOverlayOpen(true)
-                }}
+                ctaHref="/create"
               />
             ))}
           </div>
