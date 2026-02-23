@@ -109,8 +109,19 @@ export async function GET(request: Request, { params }: RouteContext) {
         ((lobby.endedAt ?? new Date()).getTime() - lobby.createdAt.getTime()) / 60_000
       )
     ),
-    relayMinutesSpent: 0,
-    relayHoursShared: 0,
+    playerDurationMinutes: Math.max(
+      0,
+      Math.round(
+        ((lobby.endedAt ?? new Date()).getTime() -
+          (currentPlayer?.createdAt ?? lobby.createdAt).getTime()) /
+          60_000
+      )
+    ),
+    relayMinutesUsed: 0,
+    relayHoursUsedPersonally: 0,
+    relayHoursSharedByPlayers: 0,
+    relayHoursSharedByYou: 0,
+    relayHoursUsedTotal: 0,
     remainingSubscriptionHours: 0,
     planType: "FREE" as const,
     hasSubscription: false,
@@ -120,6 +131,8 @@ export async function GET(request: Request, { params }: RouteContext) {
       lobbyId: lobby.id,
       gameStartedAt: lobby.createdAt,
       gameEndedAt: lobby.endedAt,
+      playerId: currentPlayer?.id ?? null,
+      playerJoinedAt: currentPlayer?.createdAt ?? null,
       authUserId: currentPlayer?.authUserId ?? null,
     })
   } catch {

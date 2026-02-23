@@ -33,8 +33,12 @@ type GameResponse = {
   }
   summary?: {
     gameDurationMinutes: number
-    relayMinutesSpent: number
-    relayHoursShared: number
+    playerDurationMinutes: number
+    relayMinutesUsed: number
+    relayHoursUsedPersonally: number
+    relayHoursSharedByPlayers: number
+    relayHoursSharedByYou: number
+    relayHoursUsedTotal: number
     remainingSubscriptionHours: number
     planType: "FREE" | "CORE" | "PRO"
     hasSubscription: boolean

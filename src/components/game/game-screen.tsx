@@ -63,8 +63,12 @@ type GameState = {
   }
   summary?: {
     gameDurationMinutes: number
-    relayMinutesSpent: number
-    relayHoursShared: number
+    playerDurationMinutes: number
+    relayMinutesUsed: number
+    relayHoursUsedPersonally: number
+    relayHoursSharedByPlayers: number
+    relayHoursSharedByYou: number
+    relayHoursUsedTotal: number
     remainingSubscriptionHours: number
     planType: "FREE" | "CORE" | "PRO"
     hasSubscription: boolean
@@ -2593,12 +2597,23 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   if (state.lobby.status === "ENDED") {
     const summary = state.summary
     const gameDurationLabel = formatMinutesLabel(summary?.gameDurationMinutes ?? 0)
-    const relaySpentLabel = formatMinutesLabel(summary?.relayMinutesSpent ?? 0)
-    const relayHoursShared = Number((summary?.relayHoursShared ?? 0).toFixed(2))
+    const playerDurationLabel = formatMinutesLabel(summary?.playerDurationMinutes ?? 0)
+    const relayUsedLabel = formatMinutesLabel(summary?.relayMinutesUsed ?? 0)
+    const relayHoursUsedPersonally = Number(
+      (summary?.relayHoursUsedPersonally ?? 0).toFixed(2)
+    )
+    const relayHoursSharedByPlayers = Number(
+      (summary?.relayHoursSharedByPlayers ?? 0).toFixed(2)
+    )
+    const relayHoursSharedByYou = Number(
+      (summary?.relayHoursSharedByYou ?? 0).toFixed(2)
+    )
+    const relayHoursUsedTotal = Number(
+      (summary?.relayHoursUsedTotal ?? 0).toFixed(2)
+    )
     const remainingHours = Number(
       (summary?.remainingSubscriptionHours ?? relayViewer?.totalAvailableHours ?? 0).toFixed(2)
     )
-    const showSubscriptionSummary = Boolean(summary?.hasSubscription)
 
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center">
@@ -2611,21 +2626,27 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             Session Summary
           </p>
           <p className="mt-2 text-sm font-semibold text-black">
-            Time played: {gameDurationLabel}
+            Total game time: {gameDurationLabel}
           </p>
           <p className="mt-1 text-sm text-black/80">
-            Relay time used: {relaySpentLabel}
+            Your time in game: {playerDurationLabel}
           </p>
-          {relayHoursShared > 0 ? (
+          <p className="mt-1 text-sm text-black/80">Relay time active: {relayUsedLabel}</p>
+          <p className="mt-1 text-sm text-black/80">
+            Relay hours shared by players: {relayHoursSharedByPlayers}h
+          </p>
+          <p className="mt-1 text-sm text-black/80">
+            Your own relay hours used: {relayHoursUsedPersonally}h
+          </p>
+          <p className="mt-1 text-sm font-semibold text-black">
+            Total relay hours used: {relayHoursUsedTotal}h
+          </p>
+          {relayHoursSharedByYou > 0 ? (
             <p className="mt-1 text-sm text-black/80">
-              Relay hours shared: {relayHoursShared}h
+              Relay hours you shared: {relayHoursSharedByYou}h
             </p>
           ) : null}
-          {showSubscriptionSummary ? (
-            <p className="mt-1 text-sm text-black/80">
-              Relay hours left: {remainingHours}h
-            </p>
-          ) : null}
+          <p className="mt-1 text-sm text-black/80">Relay hours left: {remainingHours}h</p>
         </div>
         <SecondaryButton type="button" onClick={() => router.push("/")}
         >

@@ -70,8 +70,12 @@ export type RelayRoomState = {
 
 export type RelayGameSummary = {
   gameDurationMinutes: number
-  relayMinutesSpent: number
-  relayHoursShared: number
+  playerDurationMinutes: number
+  relayMinutesUsed: number
+  relayHoursUsedPersonally: number
+  relayHoursSharedByPlayers: number
+  relayHoursSharedByYou: number
+  relayHoursUsedTotal: number
   remainingSubscriptionHours: number
   planType: PlanType
   hasSubscription: boolean
@@ -1155,6 +1159,8 @@ export async function getRelayGameSummaryForUser(input: {
   lobbyId: string
   gameStartedAt: Date
   gameEndedAt?: Date | null
+  playerId?: string | null
+  playerJoinedAt?: Date | null
   authUserId?: string | null
 }): Promise<RelayGameSummary> {
   const now = new Date()
@@ -1163,39 +1169,56 @@ export async function getRelayGameSummaryForUser(input: {
     0,
     Math.round((sessionEnd.getTime() - input.gameStartedAt.getTime()) / 60_000)
   )
+  const playerStart = input.playerJoinedAt ?? input.gameStartedAt
+  const playerDurationMinutes = Math.max(
+    0,
+    Math.round((sessionEnd.getTime() - playerStart.getTime()) / 60_000)
+  )
 
-  if (!input.authUserId) {
-    return {
-      gameDurationMinutes,
-      relayMinutesSpent: 0,
-      relayHoursShared: 0,
-      remainingSubscriptionHours: 0,
-      planType: "FREE",
-      hasSubscription: false,
-    }
-  }
-
-  const [profile, sessions] = await Promise.all([
-    getRelayProfile(input.authUserId),
-    prisma.relaySession.findMany({
-      where: {
-        lobbyId: input.lobbyId,
-        hostUserId: input.authUserId,
-        startedAt: { not: null },
-      },
-      select: {
-        startedAt: true,
-        endedAt: true,
-        maxMinutesGranted: true,
-        activeVideoParticipants: true,
-        baseRate: true,
-      },
-    }),
+  const [profile, requesterSessions, hostSessions] = await Promise.all([
+    input.authUserId ? getRelayProfile(input.authUserId) : Promise.resolve(null),
+    input.playerId
+      ? prisma.relaySession.findMany({
+          where: {
+            lobbyId: input.lobbyId,
+            requesterPlayerId: input.playerId,
+            startedAt: { not: null },
+          },
+          select: {
+            requesterPlayerId: true,
+            hostPlayerId: true,
+            startedAt: true,
+            endedAt: true,
+            maxMinutesGranted: true,
+            activeVideoParticipants: true,
+            baseRate: true,
+          },
+        })
+      : Promise.resolve([]),
+    input.playerId
+      ? prisma.relaySession.findMany({
+          where: {
+            lobbyId: input.lobbyId,
+            hostPlayerId: input.playerId,
+            startedAt: { not: null },
+          },
+          select: {
+            requesterPlayerId: true,
+            hostPlayerId: true,
+            startedAt: true,
+            endedAt: true,
+            maxMinutesGranted: true,
+            activeVideoParticipants: true,
+            baseRate: true,
+          },
+        })
+      : Promise.resolve([]),
   ])
 
-  let relayMinutesSpent = 0
-  let relayHoursShared = 0
-  for (const session of sessions) {
+  let relayMinutesUsed = 0
+  let relayHoursUsedPersonally = 0
+  let relayHoursSharedByPlayers = 0
+  for (const session of requesterSessions) {
     if (!session.startedAt) {
       continue
     }
@@ -1211,30 +1234,76 @@ export async function getRelayGameSummaryForUser(input: {
         RELAY_SESSION_MAX_MINUTES
       )
     )
-    relayMinutesSpent += Math.min(rawMinutes, maxMinutes)
+    const effectiveMinutes = Math.min(rawMinutes, maxMinutes)
+    relayMinutesUsed += effectiveMinutes
+
     const participants = Math.max(
       1,
-      Math.min(
-        session.activeVideoParticipants || 1,
-        RELAY_MAX_PARTICIPANTS
-      )
+      Math.min(session.activeVideoParticipants || 1, RELAY_MAX_PARTICIPANTS)
     )
     const sessionRate =
       Number.isFinite(session.baseRate) && session.baseRate > 0
         ? session.baseRate
         : RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
-    relayHoursShared += toHoursFromMinutes(
-      Math.min(rawMinutes, maxMinutes) * participants * sessionRate
+    const sessionHours = toHoursFromMinutes(
+      effectiveMinutes * participants * sessionRate
+    )
+
+    if (!session.hostPlayerId || session.hostPlayerId === input.playerId) {
+      relayHoursUsedPersonally += sessionHours
+    } else {
+      relayHoursSharedByPlayers += sessionHours
+    }
+  }
+
+  let relayHoursSharedByYou = 0
+  for (const session of hostSessions) {
+    if (!session.startedAt) {
+      continue
+    }
+    if (session.requesterPlayerId === input.playerId) {
+      // Exclude self sessions from "shared by you".
+      continue
+    }
+    const cappedEnd = session.endedAt ?? sessionEnd
+    const rawMinutes = Math.max(
+      0,
+      (cappedEnd.getTime() - session.startedAt.getTime()) / 60_000
+    )
+    const maxMinutes = Math.max(
+      1,
+      Math.min(
+        session.maxMinutesGranted ?? RELAY_SESSION_MAX_MINUTES,
+        RELAY_SESSION_MAX_MINUTES
+      )
+    )
+    const effectiveMinutes = Math.min(rawMinutes, maxMinutes)
+    const participants = Math.max(
+      1,
+      Math.min(session.activeVideoParticipants || 1, RELAY_MAX_PARTICIPANTS)
+    )
+    const sessionRate =
+      Number.isFinite(session.baseRate) && session.baseRate > 0
+        ? session.baseRate
+        : RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE
+    relayHoursSharedByYou += toHoursFromMinutes(
+      effectiveMinutes * participants * sessionRate
     )
   }
 
+  const relayHoursUsedTotal = relayHoursUsedPersonally + relayHoursSharedByPlayers
+
   return {
     gameDurationMinutes,
-    relayMinutesSpent: Number(relayMinutesSpent.toFixed(1)),
-    relayHoursShared: roundHours(relayHoursShared),
-    remainingSubscriptionHours: profile.totalAvailableHours,
-    planType: profile.planType,
-    hasSubscription: profile.planType !== "FREE",
+    playerDurationMinutes,
+    relayMinutesUsed: Number(relayMinutesUsed.toFixed(1)),
+    relayHoursUsedPersonally: roundHours(relayHoursUsedPersonally),
+    relayHoursSharedByPlayers: roundHours(relayHoursSharedByPlayers),
+    relayHoursSharedByYou: roundHours(relayHoursSharedByYou),
+    relayHoursUsedTotal: roundHours(relayHoursUsedTotal),
+    remainingSubscriptionHours: profile?.totalAvailableHours ?? 0,
+    planType: profile?.planType ?? "FREE",
+    hasSubscription: (profile?.planType ?? "FREE") !== "FREE",
   }
 }
 
@@ -1279,10 +1348,56 @@ export async function activateRelaySession(input: {
       if (requester.authUserId) {
         const selfSummary = await getRelayProfile(requester.authUserId)
         if (selfSummary.totalAvailableHours > 0) {
+          const existingSelfSession = await tx.relaySession.findFirst({
+            where: {
+              lobbyId: lobby.id,
+              requesterPlayerId: requester.id,
+              hostPlayerId: requester.id,
+              hostUserId: requester.authUserId,
+              status: { in: ["APPROVED", "ACTIVE"] },
+              expiresAt: { gte: new Date() },
+            },
+            orderBy: { createdAt: "desc" },
+            select: { id: true, hostUserId: true },
+          })
+
+          if (existingSelfSession) {
+            const resumed = await tx.relaySession.update({
+              where: { id: existingSelfSession.id },
+              data: {
+                status: "ACTIVE",
+              },
+              select: { id: true, hostUserId: true },
+            })
+            return {
+              mode: "SELF",
+              hostUserId: resumed.hostUserId,
+              sessionId: resumed.id,
+            }
+          }
+
+          const createdSelfSession = await tx.relaySession.create({
+            data: {
+              lobbyId: lobby.id,
+              requesterPlayerId: requester.id,
+              requesterUserId: requester.authUserId,
+              hostPlayerId: requester.id,
+              hostUserId: requester.authUserId,
+              status: "ACTIVE",
+              maxMinutesGranted: RELAY_SESSION_MAX_MINUTES,
+              activeVideoParticipants: 1,
+              baseRate: RELAY_BASE_RATE_PER_PARTICIPANT_MINUTE,
+              startedAt: new Date(),
+              expiresAt: addDays(new Date(), 1),
+              note: "self_relay_session",
+            },
+            select: { id: true, hostUserId: true },
+          })
+
           return {
             mode: "SELF",
-            hostUserId: requester.authUserId,
-            sessionId: null,
+            hostUserId: createdSelfSession.hostUserId,
+            sessionId: createdSelfSession.id,
           }
         }
       }
