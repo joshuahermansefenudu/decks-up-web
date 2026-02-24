@@ -1,3 +1,7 @@
+"use client"
+
+import * as React from "react"
+
 import { PlanBadge, type PlanType } from "@/components/ui/plan-badge"
 
 type RelayRoomState = {
@@ -71,6 +75,14 @@ function round2(value: number) {
   return Number(value.toFixed(2))
 }
 
+function formatCountdown(seconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(seconds))
+  const totalMinutes = Math.floor(safeSeconds / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return `${hours}h ${minutes}m`
+}
+
 function getStatusText(props: RelayStatusPanelProps): string {
   const { room, viewer, relayActive, isTurnUnlocked } = props
   if (relayActive || (room?.relayEnabled && room.relayStatus !== "DENIED")) {
@@ -113,6 +125,38 @@ function RelayStatusPanel({
   const remaining = room?.remainingHostHours ?? viewer?.totalAvailableHours ?? 0
   const relayHoursShared = room?.relayHoursSharedByHost ?? 0
   const relaySharedParticipants = room?.relaySharedParticipantCount ?? 0
+  const shouldCountDown =
+    Boolean(relayActive || (room?.relayEnabled && room.relayStatus !== "DENIED")) &&
+    burnRate > 0 &&
+    remaining > 0
+  const initialCountdownSeconds = shouldCountDown
+    ? Math.max(0, Math.round((remaining / burnRate) * 60))
+    : null
+  const [countdownSeconds, setCountdownSeconds] = React.useState<number | null>(
+    initialCountdownSeconds
+  )
+
+  React.useEffect(() => {
+    setCountdownSeconds(initialCountdownSeconds)
+  }, [initialCountdownSeconds])
+
+  React.useEffect(() => {
+    if (countdownSeconds === null || countdownSeconds <= 0) {
+      return
+    }
+    const timerId = window.setInterval(() => {
+      setCountdownSeconds((current) => {
+        if (current === null) {
+          return current
+        }
+        return Math.max(0, current - 1)
+      })
+    }, 1000)
+    return () => {
+      window.clearInterval(timerId)
+    }
+  }, [countdownSeconds])
+
   const usagePercent =
     burnRate > 0 ? Math.min(100, Math.max(10, Math.round(burnRate * 20))) : 0
 
@@ -135,6 +179,11 @@ function RelayStatusPanel({
       </div>
 
       <p className="mt-2 text-sm font-semibold text-black">{statusText}</p>
+      {countdownSeconds !== null ? (
+        <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-black/80">
+          Relay countdown: {formatCountdown(countdownSeconds)}
+        </p>
+      ) : null}
 
       <div className="mt-3 grid gap-2 text-[11px] font-semibold uppercase tracking-wide text-black/70 sm:grid-cols-3">
         <p>Remaining: {round2(remaining)}h</p>

@@ -321,6 +321,8 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     React.useState(false)
   const [isRelayShareModalOpen, setIsRelayShareModalOpen] =
     React.useState(false)
+  const [isRelayAccessModalOpen, setIsRelayAccessModalOpen] =
+    React.useState(false)
   const [isRelayPurchaseModalOpen, setIsRelayPurchaseModalOpen] =
     React.useState(false)
   const [isSignedIn, setIsSignedIn] = React.useState(false)
@@ -414,6 +416,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const relayRoom = relayState?.room ?? null
   const requestableSharers = relayViewer?.requestableSharers ?? []
   const shareCandidates = relayViewer?.shareCandidates ?? []
+  const uncoveredShareCandidates = React.useMemo(
+    () =>
+      shareCandidates.filter((candidate) => !candidate.alreadySharedByViewer),
+    [shareCandidates]
+  )
   const incomingRelayRequests = relayViewer?.incomingRelayRequests ?? []
   const pendingRelayRequest = incomingRelayRequests[0] ?? null
   const canSelfEnableRelay = Boolean(relayViewer?.canEnableRelay)
@@ -645,6 +652,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             ?.name ?? "a sharer"
         setWebrtcStatus(`Relay request sent to ${sharerName}. Waiting for decision...`)
         relayRequestSentRef.current = true
+        setIsRelayAccessModalOpen(false)
         if (isSfuMode && payload.requestId) {
           void enableRelayForParticipant(playerId, payload.requestId).catch(() => {
             // Keep polling relay state even if signaling helper fails.
@@ -981,23 +989,62 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     if (!turnToggleUnlocked) {
       relaySharePromptedRef.current = false
       setIsRelayShareModalOpen(false)
+      setIsRelayAccessModalOpen(false)
       return
     }
 
-    if (!canShareRelayHours || shareCandidates.length === 0) {
+    if (!canShareRelayHours || uncoveredShareCandidates.length === 0) {
       return
     }
 
     if (!relaySharePromptedRef.current) {
       relaySharePromptedRef.current = true
       setSelectedRelayShareIds(
-        shareCandidates
-          .filter((candidate) => !candidate.alreadySharedByViewer)
-          .map((candidate) => candidate.playerId)
+        uncoveredShareCandidates.map((candidate) => candidate.playerId)
       )
       setIsRelayShareModalOpen(true)
     }
-  }, [canShareRelayHours, shareCandidates, turnToggleUnlocked])
+  }, [canShareRelayHours, turnToggleUnlocked, uncoveredShareCandidates])
+
+  React.useEffect(() => {
+    if (!turnToggleUnlocked || requestedTransport !== "p2p") {
+      setIsRelayAccessModalOpen(false)
+      return
+    }
+
+    if (canSelfEnableRelay) {
+      setIsRelayAccessModalOpen(false)
+      return
+    }
+
+    setIsRelayAccessModalOpen(true)
+  }, [canSelfEnableRelay, requestedTransport, turnToggleUnlocked])
+
+  React.useEffect(() => {
+    if (!isVirtual || !turnToggleUnlocked || requestedTransport === "relay") {
+      return
+    }
+    if (!canSelfEnableRelay) {
+      return
+    }
+
+    const allPlayersCovered =
+      !canShareRelayHours || uncoveredShareCandidates.length === 0
+
+    if (!allPlayersCovered) {
+      return
+    }
+
+    setRequestedTransport("relay")
+    setWebrtcStatus("Relay active. All players are covered.")
+  }, [
+    canSelfEnableRelay,
+    canShareRelayHours,
+    isVirtual,
+    requestedTransport,
+    turnToggleUnlocked,
+    uncoveredShareCandidates,
+  ])
 
   React.useEffect(() => {
     if (relayTickTimerRef.current) {
@@ -2765,19 +2812,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       canShareRelayHours &&
       Boolean(pendingRelayRequest) &&
       pendingRelayRequest?.requesterPlayerId !== playerId
-    const hasShareCandidates = shareCandidates.length > 0
-    const showRequestRelayOptions =
-      !canSelfEnableRelay &&
-      canRequestRelayFromOthers &&
-      requestedTransport === "p2p"
-    const canSubmitRelayRequest = turnToggleUnlocked && showRequestRelayOptions
+    const hasShareCandidates = uncoveredShareCandidates.length > 0
     const showRelaySharePrompt =
       canShareRelayHours &&
       hasShareCandidates &&
-      requestedTransport === "p2p"
-    const showRelayUpgradePrompt =
-      !canSelfEnableRelay &&
-      !canShareRelayHours &&
       requestedTransport === "p2p"
     const relayButtonLabel =
       canSelfEnableRelay || requestedTransport === "relay"
@@ -2807,11 +2845,12 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           onCompleted={async () => {
             await Promise.all([fetchRelayState(), fetchState(), fetchBillingSummary()])
             setWebrtcStatus("Relay purchase confirmed. Game state refreshed.")
+            setIsRelayAccessModalOpen(false)
           }}
         />
         <RelayShareModal
           open={isRelayShareModalOpen}
-          candidates={shareCandidates}
+          candidates={uncoveredShareCandidates}
           selectedPlayerIds={selectedRelayShareIds}
           sharerHours={relayViewer?.totalAvailableHours ?? 0}
           isSubmitting={isRelayShareSubmitting}
@@ -2827,7 +2866,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           }}
           onSelectAll={() => {
             setSelectedRelayShareIds(
-              shareCandidates.map((candidate) => candidate.playerId)
+              uncoveredShareCandidates.map((candidate) => candidate.playerId)
             )
           }}
           onClear={() => {
@@ -2852,6 +2891,73 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             void submitRelayDecision(false)
           }}
         />
+        {isRelayAccessModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+            <div className="w-full max-w-md rounded-3xl border-2 border-black bg-offwhite p-5 shadow-[6px_6px_0_#000]">
+              <h2 className="font-display text-2xl uppercase tracking-wide text-black">
+                Relay Needed
+              </h2>
+              <p className="mt-2 text-sm text-black/80">
+                Direct connection failed. Continue by buying relay or requesting relay from a player with hours.
+              </p>
+
+              <div className="mt-4 space-y-3">
+                <PrimaryButton
+                  type="button"
+                  className="w-full"
+                  onClick={() => {
+                    setIsRelayPurchaseModalOpen(true)
+                  }}
+                >
+                  Subscribe / Buy Relay Hours
+                </PrimaryButton>
+
+                {canRequestRelayFromOthers ? (
+                  <>
+                    <select
+                      value={selectedSharerPlayerId}
+                      onChange={(event) => setSelectedSharerPlayerId(event.target.value)}
+                      className="w-full rounded-full border-2 border-black bg-offwhite px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+                      disabled={isRelayRequestSubmitting}
+                    >
+                      {requestableSharers.map((sharer) => (
+                        <option key={sharer.playerId} value={sharer.playerId}>
+                          Request from {sharer.name}
+                        </option>
+                      ))}
+                    </select>
+                    <SecondaryButton
+                      type="button"
+                      className="w-full"
+                      disabled={isRelayRequestSubmitting}
+                      onClick={() => {
+                        void requestRelayAccess(selectedSharerPlayerId || undefined)
+                      }}
+                    >
+                      {isRelayRequestSubmitting
+                        ? "Requesting..."
+                        : "Request Relay from Player"}
+                    </SecondaryButton>
+                  </>
+                ) : (
+                  <p className="rounded-xl border-2 border-black bg-lightgray px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black/70">
+                    No player with relay hours is available right now.
+                  </p>
+                )}
+              </div>
+
+              <div className="mt-4">
+                <SecondaryButton
+                  type="button"
+                  className="w-full"
+                  onClick={() => setIsRelayAccessModalOpen(false)}
+                >
+                  Close
+                </SecondaryButton>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <header className="flex items-start justify-between gap-4">
           <div>
@@ -2928,41 +3034,13 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               {preferredTransport === "relay" ? "On" : "Off"}
             </span>
           </div>
-          {showRequestRelayOptions ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={selectedSharerPlayerId}
-                onChange={(event) => setSelectedSharerPlayerId(event.target.value)}
-                className="rounded-full border-2 border-black bg-offwhite px-3 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
-                disabled={!canSubmitRelayRequest}
-              >
-                {requestableSharers.map((sharer) => (
-                  <option key={sharer.playerId} value={sharer.playerId}>
-                    Request from {sharer.name}
-                  </option>
-                ))}
-              </select>
-              <PrimaryButton
-                type="button"
-                className="px-4 py-2 text-xs"
-                onClick={() => {
-                  void requestRelayAccess(selectedSharerPlayerId || undefined)
-                }}
-                disabled={isRelayRequestSubmitting || !canSubmitRelayRequest}
-              >
-                {isRelayRequestSubmitting ? "Requesting..." : "Request Relay Access"}
-              </PrimaryButton>
-            </div>
-          ) : null}
           {showRelaySharePrompt ? (
             <PrimaryButton
               type="button"
               className="px-4 py-2 text-xs"
               onClick={() => {
                 setSelectedRelayShareIds(
-                  shareCandidates
-                    .filter((candidate) => !candidate.alreadySharedByViewer)
-                    .map((candidate) => candidate.playerId)
+                  uncoveredShareCandidates.map((candidate) => candidate.playerId)
                 )
                 setIsRelayShareModalOpen(true)
               }}
@@ -2981,35 +3059,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 text-xs font-semibold uppercase tracking-wide text-black shadow-[3px_3px_0_#000]">
             Some players do not have relay hours. Share your hours so they can
             continue video if P2P fails.
-          </div>
-        ) : null}
-        {showRequestRelayOptions && !turnToggleUnlocked ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 text-xs font-semibold uppercase tracking-wide text-black/80 shadow-[3px_3px_0_#000]">
-            Direct connection is active. Relay request unlocks only if P2P fails.
-          </div>
-        ) : null}
-        {showRelayUpgradePrompt ? (
-          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm text-black shadow-[3px_3px_0_#000]">
-            <p className="font-semibold">
-              You do not have relay hours yet.
-            </p>
-            <p className="mt-1 text-xs text-black/70">
-              Option 1: subscribe or buy relay hours.
-              {canRequestRelayFromOthers
-                ? " Option 2: request relay hours from players who have an active subscription."
-                : " No players in this room currently have relay hours to share."}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <PrimaryButton
-                type="button"
-                className="px-4 py-2 text-xs"
-                onClick={() => {
-                  setIsRelayPurchaseModalOpen(true)
-                }}
-              >
-                Subscribe / Buy Relay Hours
-              </PrimaryButton>
-            </div>
           </div>
         ) : null}
         {relayViewer?.lowCreditWarning ? (
