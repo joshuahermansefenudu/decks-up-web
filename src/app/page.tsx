@@ -25,7 +25,15 @@ export default function HomePage() {
       <Stack className="gap-6">
         <header className="space-y-3">
           <div className="flex items-start justify-between gap-3">
-            <Badge className="w-fit">Charades party game</Badge>
+            <div className="flex items-center gap-2">
+              <Badge className="w-fit">Charades party game</Badge>
+              <Link
+                href="/pricing"
+                className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+              >
+                Pricing
+              </Link>
+            </div>
             <HomeAccountEntry />
           </div>
           <h1 className="font-display text-4xl uppercase tracking-wide sm:text-5xl">
@@ -52,12 +60,6 @@ export default function HomePage() {
                 <SecondaryButton asChild>
                   <Link href="/play-access?next=join">Join Game</Link>
                 </SecondaryButton>
-                <Link
-                  href="/pricing"
-                  className="mt-1 text-center text-xs font-semibold uppercase tracking-wide text-black/70 underline decoration-2 underline-offset-4"
-                >
-                  View Pricing
-                </Link>
               </CardContent>
             </Card>
 
