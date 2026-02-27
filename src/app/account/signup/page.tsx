@@ -6,6 +6,7 @@ import * as React from "react"
 
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { GoogleOAuthButton } from "@/components/auth/google-oauth-button"
 import {
   Card,
   CardContent,
@@ -25,6 +26,7 @@ export default function AccountSignupPage() {
   const [error, setError] = React.useState("")
   const [message, setMessage] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = React.useState(false)
   const [nextPath, setNextPath] = React.useState<"" | "/join" | "/create">("")
 
   React.useEffect(() => {
@@ -83,6 +85,29 @@ export default function AccountSignupPage() {
     }
   }
 
+  const handleGoogleSignIn = async () => {
+    setError("")
+    setMessage("")
+    setIsGoogleSigningIn(true)
+
+    try {
+      const { error: oauthError } = await supabaseBrowser.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}${nextPath || "/account"}`,
+        },
+      })
+
+      if (oauthError) {
+        setError(`GOOGLE_SIGNUP_ERROR | detail=${oauthError.message}`)
+      }
+    } catch {
+      setError("Unable to continue with Google.")
+    } finally {
+      setIsGoogleSigningIn(false)
+    }
+  }
+
   return (
     <PageContainer>
       <Stack className="gap-6">
@@ -102,6 +127,18 @@ export default function AccountSignupPage() {
           </CardHeader>
           <CardContent>
             <form className="flex flex-col gap-4" onSubmit={handleSignUp}>
+              <GoogleOAuthButton
+                disabled={isGoogleSigningIn || isSubmitting}
+                onClick={handleGoogleSignIn}
+                isLoading={isGoogleSigningIn}
+              >
+                Continue with Google
+              </GoogleOAuthButton>
+
+              <p className="text-center text-xs font-semibold uppercase tracking-wide text-black/50">
+                or continue with email
+              </p>
+
               <label className="text-sm font-semibold uppercase tracking-wide">
                 Email
                 <input

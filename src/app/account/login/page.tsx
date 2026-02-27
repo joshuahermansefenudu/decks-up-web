@@ -6,6 +6,7 @@ import * as React from "react"
 
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { GoogleOAuthButton } from "@/components/auth/google-oauth-button"
 import {
   Card,
   CardContent,
@@ -27,6 +28,7 @@ export default function AccountLoginPage() {
   const [message, setMessage] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isRecovering, setIsRecovering] = React.useState(false)
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = React.useState(false)
   const [nextPath, setNextPath] = React.useState<"" | "/join" | "/create">("")
 
   React.useEffect(() => {
@@ -105,6 +107,29 @@ export default function AccountLoginPage() {
     }
   }
 
+  const handleGoogleSignIn = async () => {
+    setError("")
+    setMessage("")
+    setIsGoogleSigningIn(true)
+
+    try {
+      const { error: oauthError } = await supabaseBrowser.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}${nextPath || "/account"}`,
+        },
+      })
+
+      if (oauthError) {
+        setError(`GOOGLE_LOGIN_ERROR | detail=${oauthError.message}`)
+      }
+    } catch (error) {
+      setError(formatThrownError(error, "GOOGLE_LOGIN_ERROR"))
+    } finally {
+      setIsGoogleSigningIn(false)
+    }
+  }
+
   return (
     <PageContainer>
       <Stack className="gap-6">
@@ -124,6 +149,18 @@ export default function AccountLoginPage() {
           </CardHeader>
           <CardContent>
             <form className="flex flex-col gap-4" onSubmit={handleSignIn}>
+              <GoogleOAuthButton
+                disabled={isGoogleSigningIn || isSubmitting}
+                onClick={handleGoogleSignIn}
+                isLoading={isGoogleSigningIn}
+              >
+                Continue with Google
+              </GoogleOAuthButton>
+
+              <p className="text-center text-xs font-semibold uppercase tracking-wide text-black/50">
+                or continue with email
+              </p>
+
               <label className="text-sm font-semibold uppercase tracking-wide">
                 Email
                 <input
