@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
+import { BillingSubscriptionStatus } from "@prisma/client"
 
 import { getAuthUser } from "@/lib/auth-user"
+import { getStripeServerClient } from "@/lib/stripe/server"
 import { prisma } from "@/lib/prisma"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 
@@ -36,6 +38,38 @@ export async function POST(request: Request) {
     return NextResponse.json({ error }, { status: 401 })
   }
 
+  const activeSubscriptions = await prisma.billingSubscription.findMany({
+    where: {
+      userId: user.id,
+      status: {
+        in: [
+          BillingSubscriptionStatus.ACTIVE,
+          BillingSubscriptionStatus.TRIALING,
+          BillingSubscriptionStatus.PAST_DUE,
+          BillingSubscriptionStatus.INCOMPLETE,
+        ],
+      },
+    },
+    select: {
+      stripeSubscriptionId: true,
+    },
+  })
+
+  if (activeSubscriptions.length > 0) {
+    try {
+      const stripe = getStripeServerClient()
+      for (const subscription of activeSubscriptions) {
+        await stripe.subscriptions.cancel(subscription.stripeSubscriptionId)
+      }
+    } catch (subscriptionError) {
+      console.error("ACCOUNT_SUBSCRIPTION_CANCEL_ERROR", subscriptionError)
+      return NextResponse.json(
+        { error: "Failed to cancel active subscriptions." },
+        { status: 500 }
+      )
+    }
+  }
+
   const photos = await prisma.accountPhoto.findMany({
     where: { userId: user.id },
     select: { storagePath: true },
@@ -66,7 +100,8 @@ export async function POST(request: Request) {
   })
 
   const { error: deleteAuthError } = await supabaseAdmin.auth.admin.deleteUser(
-    user.id
+    user.id,
+    true
   )
 
   if (deleteAuthError) {

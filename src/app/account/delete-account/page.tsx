@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation"
 import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -15,7 +17,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
-import { SecondaryButton } from "@/components/ui/secondary-button"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function DeleteAccountPage() {
@@ -112,12 +113,27 @@ export default function DeleteAccountPage() {
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge asChild className="w-fit">
+              <Link href="/">Charades party game</Link>
+            </Badge>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Pricing
+            </Link>
+          </div>
+          <HomeAccountEntry />
+        </div>
+
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             Delete Account
           </h1>
           <p className="text-sm text-black/70">
-            Permanently delete your account.
+            Delete your account and cancel all active subscriptions.
           </p>
         </header>
 
@@ -125,10 +141,20 @@ export default function DeleteAccountPage() {
           <CardHeader>
             <CardTitle>Danger zone</CardTitle>
             <CardDescription>
-              Warning: your saved pictures will be permanently deleted.
+              Your account will be soft-deleted first. You can recover it by
+              logging back in within 30 days, after which deletion becomes
+              permanent.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2 rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm text-black/75 shadow-[3px_3px_0_#000]">
+              <p>Deleting your account cancels all active subscriptions.</p>
+              <p>
+                Saved photos and account data are removed from this app during
+                deletion.
+              </p>
+            </div>
+
             {isSessionLoading ? (
               <p className="text-sm text-black/70">Checking session...</p>
             ) : !session ? (
@@ -146,19 +172,19 @@ export default function DeleteAccountPage() {
                     className="mt-2 w-full rounded-xl border-2 border-black bg-offwhite px-4 py-3 text-base shadow-[3px_3px_0_#000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite"
                   />
                 </label>
-                <SecondaryButton type="submit" disabled={isSubmitting}>
+                <PrimaryButton
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="mt-3 bg-red-600 text-offwhite"
+                >
                   {isSubmitting ? "Deleting..." : "Delete Account"}
-                </SecondaryButton>
+                </PrimaryButton>
               </form>
             )}
 
             {error ? <p className="text-sm font-semibold text-black">{error}</p> : null}
           </CardContent>
         </Card>
-
-        <PrimaryButton asChild className="w-full">
-          <Link href="/account">Back to Account</Link>
-        </PrimaryButton>
       </Stack>
     </PageContainer>
   )
