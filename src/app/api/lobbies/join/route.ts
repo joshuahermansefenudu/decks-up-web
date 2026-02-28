@@ -4,8 +4,6 @@ import { getOptionalAuthUser } from "@/lib/auth-user"
 import { expireLobbyIfNeeded } from "@/lib/lobby-expiration"
 import { prisma } from "@/lib/prisma"
 
-const MAX_PLAYERS = 8
-
 function normalizeCode(code: string) {
   return code.replace(/\s+/g, "").toUpperCase()
 }
@@ -41,7 +39,7 @@ export async function POST(request: Request) {
     where: { lobbyId: lobby.id, leftAt: null },
   })
 
-  if (playerCount >= MAX_PLAYERS) {
+  if (playerCount >= lobby.maxPlayers) {
     return NextResponse.json({ error: "lobby_full" }, { status: 409 })
   }
 

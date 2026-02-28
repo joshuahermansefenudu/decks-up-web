@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Lobby"
+ADD COLUMN "maxPlayers" INTEGER NOT NULL DEFAULT 8;

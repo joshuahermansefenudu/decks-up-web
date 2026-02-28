@@ -4,8 +4,10 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import * as React from "react"
 
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -15,9 +17,14 @@ import {
 } from "@/components/ui/card"
 import { ErrorDebugPanel } from "@/components/ui/error-debug-panel"
 import { PrimaryButton } from "@/components/ui/primary-button"
-import { SecondaryButton } from "@/components/ui/secondary-button"
 import { formatResponseError, formatThrownError } from "@/lib/client-error"
 import { getAccessTokenSafe } from "@/lib/safe-auth"
+
+const MIN_PLAYERS = 2
+const MODE_MAX_PLAYERS: Record<"in_person" | "virtual", number> = {
+  in_person: 12,
+  virtual: 8,
+}
 
 export default function CreatePage() {
   const router = useRouter()
@@ -25,8 +32,31 @@ export default function CreatePage() {
   const [playMode, setPlayMode] = React.useState<"in_person" | "virtual">(
     "virtual"
   )
+  const [maxPlayers, setMaxPlayers] = React.useState(8)
   const [error, setError] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const mode = params.get("mode")
+
+    if (mode === "in_person" || mode === "virtual") {
+      setPlayMode(mode)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const modeCap = MODE_MAX_PLAYERS[playMode]
+    setMaxPlayers((current) => {
+      if (current < MIN_PLAYERS) {
+        return MIN_PLAYERS
+      }
+      if (current > modeCap) {
+        return modeCap
+      }
+      return current
+    })
+  }, [playMode])
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -47,7 +77,7 @@ export default function CreatePage() {
           "Content-Type": "application/json",
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         },
-        body: JSON.stringify({ name, mode: playMode }),
+        body: JSON.stringify({ name, mode: playMode, maxPlayers }),
       })
 
       if (!response.ok) {
@@ -67,6 +97,21 @@ export default function CreatePage() {
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge asChild className="w-fit">
+              <Link href="/">Charades party game</Link>
+            </Badge>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Pricing
+            </Link>
+          </div>
+          <HomeAccountEntry />
+        </div>
+
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             Create Game
@@ -124,6 +169,51 @@ export default function CreatePage() {
                   </button>
                 </div>
 
+                <label className="block text-sm font-semibold uppercase tracking-wide">
+                  Player limit
+                  <div className="relative mt-2">
+                    <select
+                      name="maxPlayers"
+                      value={maxPlayers}
+                      onChange={(event) =>
+                        setMaxPlayers(Number.parseInt(event.target.value, 10))
+                      }
+                      className="w-full appearance-none rounded-xl border-2 border-black bg-offwhite px-4 py-3 pr-14 text-base shadow-[3px_3px_0_#000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite"
+                    >
+                      {Array.from(
+                        {
+                          length: MODE_MAX_PLAYERS[playMode] - MIN_PLAYERS + 1,
+                        },
+                        (_, index) => MIN_PLAYERS + index
+                      ).map((count) => (
+                        <option key={count} value={count}>
+                          {count} players
+                        </option>
+                      ))}
+                    </select>
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute right-5 top-1/2 -translate-y-1/2"
+                    >
+                      <svg
+                        viewBox="0 0 20 20"
+                        className="h-5 w-5 stroke-black"
+                        fill="none"
+                        strokeWidth="2.25"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M5 7.5L10 12.5L15 7.5" />
+                      </svg>
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs font-medium normal-case text-black/70">
+                    {playMode === "in_person"
+                      ? "In-person supports 2 to 12 players."
+                      : "Virtual supports 2 to 8 players."}
+                  </p>
+                </label>
+
                 <div className="rounded-2xl border-2 border-black bg-offwhite p-4 shadow-[4px_4px_0_#000]">
                   <p className="text-xs font-semibold uppercase tracking-wide text-black/70">
                     The gameplay
@@ -160,10 +250,6 @@ export default function CreatePage() {
 
               {error ? <ErrorDebugPanel message={error} /> : null}
             </form>
-
-            <SecondaryButton asChild className="mt-4 w-full">
-              <Link href="/">Back Home</Link>
-            </SecondaryButton>
           </CardContent>
         </Card>
       </Stack>

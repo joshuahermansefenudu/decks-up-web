@@ -26,6 +26,7 @@ type LobbyResponse = {
     code: string
     status: string
     mode: "IN_PERSON" | "VIRTUAL"
+    maxPlayers: number
     createdAt: string
     expiresAt: string
     hostPlayerId: string | null
@@ -202,6 +203,7 @@ export default async function LobbyPage({
           <LobbyPlayersCard
             lobbyCode={data.lobby.code}
             lobbyStatus={data.lobby.status}
+            maxPlayers={data.lobby.maxPlayers}
             players={data.players}
             currentPlayerId={playerId}
             isHost={isHost}

@@ -2642,8 +2642,10 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   }
 
   if (state.lobby.status === "ENDED") {
+    const isInPerson = state.lobby.mode === "IN_PERSON"
     const summary = state.summary
     const gameDurationLabel = formatMinutesLabel(summary?.gameDurationMinutes ?? 0)
+    const playersCount = state.players.length
     const playerDurationLabel = formatMinutesLabel(summary?.playerDurationMinutes ?? 0)
     const relayUsedLabel = formatMinutesLabel(summary?.relayMinutesUsed ?? 0)
     const relayHoursUsedPersonally = Number(
@@ -2675,25 +2677,32 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           <p className="mt-2 text-sm font-semibold text-black">
             Total game time: {gameDurationLabel}
           </p>
-          <p className="mt-1 text-sm text-black/80">
-            Your time in game: {playerDurationLabel}
-          </p>
-          <p className="mt-1 text-sm text-black/80">Relay time active: {relayUsedLabel}</p>
-          <p className="mt-1 text-sm text-black/80">
-            Relay hours shared by players: {relayHoursSharedByPlayers}h
-          </p>
-          <p className="mt-1 text-sm text-black/80">
-            Your own relay hours used: {relayHoursUsedPersonally}h
-          </p>
-          <p className="mt-1 text-sm font-semibold text-black">
-            Total relay hours used: {relayHoursUsedTotal}h
-          </p>
-          {relayHoursSharedByYou > 0 ? (
+          <p className="mt-1 text-sm text-black/80">Number of players: {playersCount}</p>
+          {isInPerson ? null : (
             <p className="mt-1 text-sm text-black/80">
-              Relay hours you shared: {relayHoursSharedByYou}h
+              Your time in game: {playerDurationLabel}
             </p>
-          ) : null}
-          <p className="mt-1 text-sm text-black/80">Relay hours left: {remainingHours}h</p>
+          )}
+          {isInPerson ? null : (
+            <>
+              <p className="mt-1 text-sm text-black/80">Relay time active: {relayUsedLabel}</p>
+              <p className="mt-1 text-sm text-black/80">
+                Relay hours shared by players: {relayHoursSharedByPlayers}h
+              </p>
+              <p className="mt-1 text-sm text-black/80">
+                Your own relay hours used: {relayHoursUsedPersonally}h
+              </p>
+              <p className="mt-1 text-sm font-semibold text-black">
+                Total relay hours used: {relayHoursUsedTotal}h
+              </p>
+              {relayHoursSharedByYou > 0 ? (
+                <p className="mt-1 text-sm text-black/80">
+                  Relay hours you shared: {relayHoursSharedByYou}h
+                </p>
+              ) : null}
+              <p className="mt-1 text-sm text-black/80">Relay hours left: {remainingHours}h</p>
+            </>
+          )}
         </div>
         <SecondaryButton type="button" onClick={() => router.push("/")}
         >

@@ -24,6 +24,7 @@ type LobbyPlayer = {
 type LobbyPlayersCardProps = {
   lobbyCode: string
   lobbyStatus: string
+  maxPlayers: number
   players: LobbyPlayer[]
   currentPlayerId?: string
   isHost: boolean
@@ -40,6 +41,7 @@ const removeErrorMessages: Record<string, string> = {
 function LobbyPlayersCard({
   lobbyCode,
   lobbyStatus,
+  maxPlayers,
   players,
   currentPlayerId,
   isHost,
@@ -89,7 +91,7 @@ function LobbyPlayersCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Players ({playersCount}/8)</CardTitle>
+        <CardTitle>Players ({playersCount}/{maxPlayers})</CardTitle>
         <CardDescription>Waiting for players to join.</CardDescription>
       </CardHeader>
       <CardContent className="text-sm text-black/70">

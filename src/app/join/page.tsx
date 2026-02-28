@@ -4,8 +4,10 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import * as React from "react"
 
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -15,7 +17,6 @@ import {
 } from "@/components/ui/card"
 import { ErrorDebugPanel } from "@/components/ui/error-debug-panel"
 import { PrimaryButton } from "@/components/ui/primary-button"
-import { SecondaryButton } from "@/components/ui/secondary-button"
 import { formatResponseError, formatThrownError } from "@/lib/client-error"
 import { getAccessTokenSafe } from "@/lib/safe-auth"
 
@@ -138,6 +139,21 @@ export default function JoinPage() {
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge asChild className="w-fit">
+              <Link href="/">Charades party game</Link>
+            </Badge>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Pricing
+            </Link>
+          </div>
+          <HomeAccountEntry />
+        </div>
+
         {toastMessage ? (
           <div
             role="status"
@@ -192,10 +208,6 @@ export default function JoinPage() {
                 {isSubmitting ? "Joining..." : "Join Lobby"}
               </PrimaryButton>
             </form>
-
-            <SecondaryButton asChild className="mt-4 w-full">
-              <Link href="/">Back Home</Link>
-            </SecondaryButton>
           </CardContent>
         </Card>
       </Stack>
