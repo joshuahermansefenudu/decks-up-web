@@ -2726,51 +2726,104 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           </header>
 
           <div className="mt-6 rounded-3xl border-2 border-black bg-offwhite p-6 shadow-[6px_6px_0_#000]">
-            <div className="grid gap-4">
-              <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
-                  <div className="h-6 w-3 rounded-sm border-2 border-black bg-offwhite -rotate-90" />
+            {isVirtual ? (
+              <div className="grid gap-4">
+                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
+                    <div className="h-6 w-3 rounded-sm border-2 border-black bg-offwhite -rotate-90" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Hold Phone Up (In Person)
+                    </p>
+                    <p className="text-sm text-black/80">
+                      Active player holds the phone above their head.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide">
-                    Hold Phone Up (In Person)
-                  </p>
-                  <p className="text-sm text-black/80">
-                    Active player holds the phone above their head.
-                  </p>
-                </div>
-              </div>
 
-              <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
-                  <div className="h-6 w-6 rounded-md border-2 border-black bg-offwhite" />
+                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
+                    <div className="h-6 w-6 rounded-md border-2 border-black bg-offwhite" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Give Hints
+                    </p>
+                    <p className="text-sm text-black/80">
+                      Teammates give clues without saying the title.
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide">
-                    Give Hints
-                  </p>
-                  <p className="text-sm text-black/80">
-                    Teammates give clues without saying the title.
-                  </p>
-                </div>
-              </div>
 
-              <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wide text-black">
-                    Next
-                  </span>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide">
-                    Next Card
-                  </p>
-                  <p className="text-sm text-black/80">
-                    Tap Next to advance to the next player and card.
-                  </p>
+                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wide text-black">
+                      Next
+                    </span>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Next Card
+                    </p>
+                    <p className="text-sm text-black/80">
+                      Tap Next to advance to the next player and card.
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="grid gap-4">
+                <div
+                  className="overflow-hidden rounded-2xl border-2 border-black shadow-[4px_4px_0_#000]"
+                  style={{ backgroundColor: "#FED32F" }}
+                >
+                  <img
+                    src="/mode-in-person.png"
+                    alt="In-person gameplay instructions"
+                    className="h-52 w-full object-contain"
+                  />
+                </div>
+
+                <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <p className="text-xs font-semibold uppercase tracking-wide">
+                    Mobile-Optimized Only
+                  </p>
+                  <p className="text-sm text-black/80">
+                    In-person mode is mobile optimized only and may not work
+                    properly on desktop.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
+                    <div className="h-6 w-3 rounded-sm border-2 border-black bg-offwhite -rotate-90" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Hold Phone Up
+                    </p>
+                    <p className="text-sm text-black/80">
+                      Active player holds the phone above their head.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
+                    <div className="h-6 w-6 rounded-md border-2 border-black bg-offwhite" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Give Hints
+                    </p>
+                    <p className="text-sm text-black/80">
+                      Teammates give clues without saying the title.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <PrimaryButton
               className="mt-6 w-full"
