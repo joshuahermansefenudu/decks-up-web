@@ -4,7 +4,9 @@ import Link from "next/link"
 import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PricingCard } from "@/components/pricing/pricing-card"
+import { Badge } from "@/components/ui/badge"
 import { PrimaryButton } from "@/components/ui/primary-button"
 import {
   createCheckoutSession,
@@ -92,7 +94,15 @@ export default function PricingPage() {
   const [session, setSession] = React.useState<Session | null>(null)
   const [isStartingCheckout, setIsStartingCheckout] = React.useState(false)
   const [checkoutError, setCheckoutError] = React.useState("")
+  const [subscriptionState, setSubscriptionState] = React.useState<
+    "unknown" | "active" | "inactive"
+  >("unknown")
   const accessToken = session?.access_token ?? ""
+  const createGameHref = session
+    ? "/create"
+    : "/account/login?next=%2Fcreate"
+  const isCheckingSubscription = Boolean(session) && subscriptionState === "unknown"
+  const hasActiveSubscription = subscriptionState === "active"
 
   React.useEffect(() => {
     let mounted = true
@@ -123,6 +133,60 @@ export default function PricingPage() {
       subscription.subscription.unsubscribe()
     }
   }, [])
+
+  React.useEffect(() => {
+    let cancelled = false
+
+    const checkSubscription = async () => {
+      if (!accessToken) {
+        setSubscriptionState("inactive")
+        return
+      }
+
+      setSubscriptionState("unknown")
+
+      try {
+        const response = await fetch("/api/payments/subscription", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: "no-store",
+        })
+
+        const payload = (await response.json().catch(() => ({}))) as {
+          subscription?: { status?: string | null } | null
+        }
+
+        if (cancelled) {
+          return
+        }
+
+        if (!response.ok || !payload.subscription) {
+          setSubscriptionState("inactive")
+          return
+        }
+
+        const status = (payload.subscription.status ?? "").toUpperCase()
+        const active =
+          status !== "CANCELED" &&
+          status !== "UNPAID" &&
+          status !== "INCOMPLETE_EXPIRED"
+
+        setSubscriptionState(active ? "active" : "inactive")
+      } catch {
+        if (cancelled) {
+          return
+        }
+        setSubscriptionState("inactive")
+      }
+    }
+
+    void checkSubscription()
+
+    return () => {
+      cancelled = true
+    }
+  }, [accessToken])
 
   const startHostedCheckout = React.useCallback(
     async (input: { kind: "SUBSCRIPTION"; planType: PurchasePlanType } | { kind: "CREDIT_PACK"; creditPack: PurchaseCreditPack }) => {
@@ -168,6 +232,23 @@ export default function PricingPage() {
   return (
     <main className="mx-auto w-full max-w-6xl px-4 pb-14 pt-8">
       <div className="space-y-12">
+        <header className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Badge asChild className="w-fit">
+                <Link href="/">Charades party game</Link>
+              </Badge>
+              <Link
+                href="/pricing"
+                className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+              >
+                Pricing
+              </Link>
+            </div>
+            <HomeAccountEntry />
+          </div>
+        </header>
+
         <section className="rounded-3xl border-2 border-black bg-offwhite p-6 shadow-[8px_8px_0_#000] sm:p-8">
           <div className="mx-auto max-w-3xl space-y-4 text-center">
             <h1 className="font-display text-4xl uppercase tracking-wide sm:text-5xl">
@@ -178,11 +259,17 @@ export default function PricingPage() {
               only used when direct connection fails.
             </p>
             <PrimaryButton asChild className="min-w-56">
-              <Link href="/">Start Playing Free</Link>
+              <Link href={createGameHref}>Start Playing Free</Link>
             </PrimaryButton>
             {!session ? (
               <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
                 Purchases require login. Guest users can still play free P2P.
+              </p>
+            ) : null}
+            {hasActiveSubscription ? (
+              <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+                You already have a subscription. Paid plan buttons will open account
+                management.
               </p>
             ) : null}
             <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
@@ -216,13 +303,23 @@ export default function PricingPage() {
                   loyaltyPrice={plan.loyaltyPrice}
                   features={plan.features}
                   ctaLabel={
-                    isPaidPlan && isStartingCheckout
-                      ? "Opening Stripe..."
-                      : plan.ctaLabel
+                    isPaidPlan && isCheckingSubscription
+                      ? "Checking..."
+                      : isPaidPlan && hasActiveSubscription
+                        ? "Manage Subscription"
+                        : isPaidPlan && isStartingCheckout
+                          ? "Opening Stripe..."
+                          : plan.ctaLabel
                   }
-                  ctaHref={isPaidPlan ? undefined : plan.ctaHref}
-                  onCtaClick={
+                  ctaHref={
                     isPaidPlan
+                      ? hasActiveSubscription
+                        ? "/account"
+                        : undefined
+                      : createGameHref
+                  }
+                  onCtaClick={
+                    isPaidPlan && !hasActiveSubscription && !isCheckingSubscription
                       ? () => {
                           void startHostedCheckout({
                             kind: "SUBSCRIPTION",

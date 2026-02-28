@@ -376,8 +376,8 @@ function RelayPurchaseOverlay({
   const showCancelButton = Boolean(hasActiveSubscription)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-      <div className="w-full max-w-2xl rounded-3xl border-2 border-black bg-offwhite p-5 shadow-[6px_6px_0_#000]">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/35 p-4">
+      <div className="mx-auto my-4 w-full max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl border-2 border-black bg-offwhite p-5 shadow-[6px_6px_0_#000]">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-2xl uppercase tracking-wide text-black">
@@ -407,7 +407,7 @@ function RelayPurchaseOverlay({
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-black/70">
               Secure Stripe Checkout
             </p>
-            <div ref={checkoutContainerRef} className="min-h-[420px]" />
+            <div ref={checkoutContainerRef} className="min-h-[320px] sm:min-h-[420px]" />
             {isWaitingForWebhook ? (
               <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-black/70">
                 Finalizing purchase and syncing relay entitlements...

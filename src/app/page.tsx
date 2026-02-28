@@ -2,6 +2,7 @@ import Link from "next/link"
 
 import { PageContainer } from "@/components/layout/page-container"
 import { HomeAccountEntry } from "@/components/layout/home-account-entry"
+import { PlayModeRotator } from "@/components/home/play-mode-rotator"
 import { Stack } from "@/components/layout/stack"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -26,7 +27,9 @@ export default function HomePage() {
         <header className="space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2">
-              <Badge className="w-fit">Charades party game</Badge>
+              <Badge asChild className="w-fit">
+                <Link href="/">Charades party game</Link>
+              </Badge>
               <Link
                 href="/pricing"
                 className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
@@ -40,7 +43,7 @@ export default function HomePage() {
             Decks Up!
           </h1>
           <p className="text-base text-black/70">
-            Create a quick lobby, snap your best cards, and get ready for chaos.
+            Play in person or online video with friends anywhere.
           </p>
         </header>
 
@@ -72,17 +75,12 @@ export default function HomePage() {
           <Card>
             <CardHeader>
               <CardTitle>How to play</CardTitle>
-              <CardDescription>Quick visual overview of the rules.</CardDescription>
+              <CardDescription>
+                Alternates between in-person and virtual game views.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="overflow-hidden rounded-2xl border-2 border-black bg-offwhite shadow-[4px_4px_0_#000]">
-                <img
-                  src="/how-to-play.png"
-                  alt="How to play Decks Up"
-                  className="h-auto w-full object-contain"
-                  loading="lazy"
-                />
-              </div>
+              <PlayModeRotator />
             </CardContent>
           </Card>
         </div>

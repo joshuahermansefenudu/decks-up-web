@@ -4,8 +4,10 @@ import Link from "next/link"
 import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -14,7 +16,6 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { PrimaryButton } from "@/components/ui/primary-button"
-import { SecondaryButton } from "@/components/ui/secondary-button"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 
 export default function UpdatePasswordPage() {
@@ -113,6 +114,21 @@ export default function UpdatePasswordPage() {
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge asChild className="w-fit">
+              <Link href="/">Charades party game</Link>
+            </Badge>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Pricing
+            </Link>
+          </div>
+          <HomeAccountEntry />
+        </div>
+
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             Update Password
@@ -165,7 +181,7 @@ export default function UpdatePasswordPage() {
                     className="mt-2 w-full rounded-xl border-2 border-black bg-offwhite px-4 py-3 text-base shadow-[3px_3px_0_#000] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite"
                   />
                 </label>
-                <PrimaryButton type="submit" disabled={isSubmitting}>
+                <PrimaryButton type="submit" disabled={isSubmitting} className="mt-3">
                   {isSubmitting ? "Updating..." : "Update Password"}
                 </PrimaryButton>
               </form>
@@ -175,10 +191,6 @@ export default function UpdatePasswordPage() {
             {message ? <p className="text-sm text-black/70">{message}</p> : null}
           </CardContent>
         </Card>
-
-        <SecondaryButton asChild className="w-full">
-          <Link href="/account">Back to Account</Link>
-        </SecondaryButton>
       </Stack>
     </PageContainer>
   )

@@ -4,9 +4,10 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import * as React from "react"
 
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
-import { GoogleOAuthButton } from "@/components/auth/google-oauth-button"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -26,7 +27,6 @@ export default function AccountSignupPage() {
   const [error, setError] = React.useState("")
   const [message, setMessage] = React.useState("")
   const [isSubmitting, setIsSubmitting] = React.useState(false)
-  const [isGoogleSigningIn, setIsGoogleSigningIn] = React.useState(false)
   const [nextPath, setNextPath] = React.useState<"" | "/join" | "/create">("")
 
   React.useEffect(() => {
@@ -35,9 +35,6 @@ export default function AccountSignupPage() {
     setNextPath(next === "/join" || next === "/create" ? next : "")
   }, [])
 
-  const accountHref = nextPath
-    ? `/account?next=${encodeURIComponent(nextPath)}`
-    : "/account"
   const loginHref = nextPath
     ? `/account/login?next=${encodeURIComponent(nextPath)}`
     : "/account/login"
@@ -85,32 +82,24 @@ export default function AccountSignupPage() {
     }
   }
 
-  const handleGoogleSignIn = async () => {
-    setError("")
-    setMessage("")
-    setIsGoogleSigningIn(true)
-
-    try {
-      const { error: oauthError } = await supabaseBrowser.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}${nextPath || "/account"}`,
-        },
-      })
-
-      if (oauthError) {
-        setError(`GOOGLE_SIGNUP_ERROR | detail=${oauthError.message}`)
-      }
-    } catch {
-      setError("Unable to continue with Google.")
-    } finally {
-      setIsGoogleSigningIn(false)
-    }
-  }
-
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge asChild className="w-fit">
+              <Link href="/">Charades party game</Link>
+            </Badge>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Pricing
+            </Link>
+          </div>
+          <HomeAccountEntry />
+        </div>
+
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             Create Account
@@ -127,18 +116,6 @@ export default function AccountSignupPage() {
           </CardHeader>
           <CardContent>
             <form className="flex flex-col gap-4" onSubmit={handleSignUp}>
-              <GoogleOAuthButton
-                disabled={isGoogleSigningIn || isSubmitting}
-                onClick={handleGoogleSignIn}
-                isLoading={isGoogleSigningIn}
-              >
-                Continue with Google
-              </GoogleOAuthButton>
-
-              <p className="text-center text-xs font-semibold uppercase tracking-wide text-black/50">
-                or continue with email
-              </p>
-
               <label className="text-sm font-semibold uppercase tracking-wide">
                 Email
                 <input
@@ -181,12 +158,12 @@ export default function AccountSignupPage() {
           </CardContent>
         </Card>
 
-        <SecondaryButton asChild className="w-full">
-          <Link href={loginHref}>Already have an account? Login</Link>
-        </SecondaryButton>
-        <SecondaryButton asChild className="w-full">
-          <Link href={accountHref}>Back to Account</Link>
-        </SecondaryButton>
+        <Link
+          href={loginHref}
+          className="inline-flex w-full items-center justify-center rounded-full border-2 border-black bg-white px-6 py-3 text-base font-semibold uppercase tracking-wide text-black shadow-[4px_4px_0_#000] transition-transform hover:-translate-x-0.5 hover:-translate-y-0.5 active:translate-x-0.5 active:translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-black focus-visible:ring-offset-2 focus-visible:ring-offset-offwhite"
+        >
+          Already have an account? Login
+        </Link>
       </Stack>
     </PageContainer>
   )

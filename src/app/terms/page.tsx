@@ -1,5 +1,9 @@
+import Link from "next/link"
+
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { Badge } from "@/components/ui/badge"
 
 const LAST_UPDATED = "December 27, 2025"
 
@@ -7,6 +11,23 @@ export default function TermsPage() {
   return (
     <PageContainer className="max-w-2xl">
       <Stack className="gap-6">
+        <header className="space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Badge asChild className="w-fit">
+                <Link href="/">Charades party game</Link>
+              </Badge>
+              <Link
+                href="/pricing"
+                className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+              >
+                Pricing
+              </Link>
+            </div>
+            <HomeAccountEntry />
+          </div>
+        </header>
+
         <header className="space-y-2">
           <h1 className="font-display text-3xl uppercase tracking-wide">
             DecksUp! — Terms & Conditions (Web)

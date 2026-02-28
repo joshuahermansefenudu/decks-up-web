@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation"
 import * as React from "react"
 import type { Session } from "@supabase/supabase-js"
 
+import { GoogleOAuthButton } from "@/components/auth/google-oauth-button"
+import { HomeAccountEntry } from "@/components/layout/home-account-entry"
 import { PageContainer } from "@/components/layout/page-container"
 import { Stack } from "@/components/layout/stack"
+import { Badge } from "@/components/ui/badge"
 import {
   Card,
   CardContent,
@@ -53,6 +56,7 @@ export default function AccountPage() {
   const router = useRouter()
   const [session, setSession] = React.useState<Session | null>(null)
   const [isSessionLoading, setIsSessionLoading] = React.useState(true)
+  const [isGoogleSigningIn, setIsGoogleSigningIn] = React.useState(false)
   const [photos, setPhotos] = React.useState<AccountPhoto[]>([])
   const [isPhotosLoading, setIsPhotosLoading] = React.useState(false)
   const [photoError, setPhotoError] = React.useState("")
@@ -74,6 +78,7 @@ export default function AccountPage() {
     creditPack?: PurchaseCreditPack
   } | null>(null)
   const [relayError, setRelayError] = React.useState("")
+  const [authActionError, setAuthActionError] = React.useState("")
 
   const accessToken = session?.access_token ?? ""
   const nextLabel = nextPath === "/join" ? "Join Game" : "Create Game"
@@ -322,9 +327,52 @@ export default function AccountPage() {
     ? `/account/signup?next=${encodeURIComponent(nextPath)}`
     : "/account/signup"
 
+  const handleGoogleSignUp = async () => {
+    if (isGoogleSigningIn) {
+      return
+    }
+
+    setAuthActionError("")
+    setIsGoogleSigningIn(true)
+
+    try {
+      const { error } = await supabaseBrowser.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}${nextPath || "/account"}`,
+        },
+      })
+
+      if (error) {
+        setAuthActionError(`GOOGLE_SIGNUP_ERROR | detail=${error.message}`)
+      }
+    } catch (error) {
+      setAuthActionError(
+        `GOOGLE_SIGNUP_ERROR | detail=${String((error as Error)?.message ?? error)}`
+      )
+    } finally {
+      setIsGoogleSigningIn(false)
+    }
+  }
+
   return (
     <PageContainer>
       <Stack className="gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge asChild className="w-fit">
+              <Link href="/">Charades party game</Link>
+            </Badge>
+            <Link
+              href="/pricing"
+              className="inline-flex items-center rounded-full border-2 border-black bg-offwhite px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
+            >
+              Pricing
+            </Link>
+          </div>
+          <HomeAccountEntry />
+        </div>
+
         <RelayPurchaseOverlay
           open={isPurchaseOverlayOpen}
           originContext="account"
@@ -361,22 +409,50 @@ export default function AccountPage() {
             </CardContent>
           </Card>
         ) : !session ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Account access</CardTitle>
-              <CardDescription>
-                Choose login or create account to unlock saved photo features.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <PrimaryButton asChild className="w-full">
-                <Link href={loginHref}>Login</Link>
-              </PrimaryButton>
-              <SecondaryButton asChild className="w-full">
-                <Link href={signupHref}>Create Account</Link>
-              </SecondaryButton>
-            </CardContent>
-          </Card>
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle>Create account</CardTitle>
+                <CardDescription>
+                  Sign up to save photos and reuse them in future games.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <GoogleOAuthButton
+                  onClick={handleGoogleSignUp}
+                  disabled={isGoogleSigningIn}
+                  isLoading={isGoogleSigningIn}
+                >
+                  Sign up with Google
+                </GoogleOAuthButton>
+                <p className="text-center text-xs font-semibold uppercase tracking-wide text-black/50">
+                  Or
+                </p>
+                <SecondaryButton asChild className="w-full">
+                  <Link href={signupHref}>Create Account</Link>
+                </SecondaryButton>
+                {authActionError ? (
+                  <p className="text-xs font-semibold uppercase tracking-wide text-black/60">
+                    {authActionError}
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Login</CardTitle>
+                <CardDescription>
+                  Already have an account? Sign in to continue.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <PrimaryButton asChild className="w-full">
+                  <Link href={loginHref}>Login</Link>
+                </PrimaryButton>
+              </CardContent>
+            </Card>
+          </>
         ) : (
           <>
             <Card>
@@ -541,9 +617,6 @@ export default function AccountPage() {
           </>
         )}
 
-        <SecondaryButton asChild className="w-full">
-          <Link href="/">Back Home</Link>
-        </SecondaryButton>
       </Stack>
     </PageContainer>
   )
