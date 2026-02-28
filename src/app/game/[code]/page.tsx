@@ -35,6 +35,8 @@ type GameResponse = {
     gameDurationMinutes: number
     playerDurationMinutes: number
     relayMinutesUsed: number
+    relayMinutesSharedByYou: number
+    relaySharedPlayersCount: number
     relayHoursUsedPersonally: number
     relayHoursSharedByPlayers: number
     relayHoursSharedByYou: number

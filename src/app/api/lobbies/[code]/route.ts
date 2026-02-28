@@ -118,6 +118,8 @@ export async function GET(request: Request, { params }: RouteContext) {
       )
     ),
     relayMinutesUsed: 0,
+    relayMinutesSharedByYou: 0,
+    relaySharedPlayersCount: 0,
     relayHoursUsedPersonally: 0,
     relayHoursSharedByPlayers: 0,
     relayHoursSharedByYou: 0,

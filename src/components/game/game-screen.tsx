@@ -65,6 +65,8 @@ type GameState = {
     gameDurationMinutes: number
     playerDurationMinutes: number
     relayMinutesUsed: number
+    relayMinutesSharedByYou: number
+    relaySharedPlayersCount: number
     relayHoursUsedPersonally: number
     relayHoursSharedByPlayers: number
     relayHoursSharedByYou: number
@@ -2646,22 +2648,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     const summary = state.summary
     const gameDurationLabel = formatMinutesLabel(summary?.gameDurationMinutes ?? 0)
     const playersCount = state.players.length
-    const playerDurationLabel = formatMinutesLabel(summary?.playerDurationMinutes ?? 0)
     const relayUsedLabel = formatMinutesLabel(summary?.relayMinutesUsed ?? 0)
-    const relayHoursUsedPersonally = Number(
-      (summary?.relayHoursUsedPersonally ?? 0).toFixed(2)
-    )
-    const relayHoursSharedByPlayers = Number(
-      (summary?.relayHoursSharedByPlayers ?? 0).toFixed(2)
-    )
-    const relayHoursSharedByYou = Number(
-      (summary?.relayHoursSharedByYou ?? 0).toFixed(2)
-    )
-    const relayHoursUsedTotal = Number(
-      (summary?.relayHoursUsedTotal ?? 0).toFixed(2)
-    )
-    const remainingHours = Number(
-      (summary?.remainingSubscriptionHours ?? relayViewer?.totalAvailableHours ?? 0).toFixed(2)
+    const relaySharedLabel = formatMinutesLabel(summary?.relayMinutesSharedByYou ?? 0)
+    const relaySharedPlayersCount = Math.max(
+      0,
+      Math.round(summary?.relaySharedPlayersCount ?? 0)
     )
 
     return (
@@ -2679,28 +2670,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           </p>
           <p className="mt-1 text-sm text-black/80">Number of players: {playersCount}</p>
           {isInPerson ? null : (
-            <p className="mt-1 text-sm text-black/80">
-              Your time in game: {playerDurationLabel}
-            </p>
-          )}
-          {isInPerson ? null : (
             <>
-              <p className="mt-1 text-sm text-black/80">Relay time active: {relayUsedLabel}</p>
+              <p className="mt-1 text-sm text-black/80">Your relay time: {relayUsedLabel}</p>
               <p className="mt-1 text-sm text-black/80">
-                Relay hours shared by players: {relayHoursSharedByPlayers}h
+                Relay time shared({relaySharedPlayersCount}): {relaySharedLabel}
               </p>
-              <p className="mt-1 text-sm text-black/80">
-                Your own relay hours used: {relayHoursUsedPersonally}h
-              </p>
-              <p className="mt-1 text-sm font-semibold text-black">
-                Total relay hours used: {relayHoursUsedTotal}h
-              </p>
-              {relayHoursSharedByYou > 0 ? (
-                <p className="mt-1 text-sm text-black/80">
-                  Relay hours you shared: {relayHoursSharedByYou}h
-                </p>
-              ) : null}
-              <p className="mt-1 text-sm text-black/80">Relay hours left: {remainingHours}h</p>
             </>
           )}
         </div>
@@ -2737,18 +2711,15 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           <div className="mt-6 rounded-3xl border-2 border-black bg-offwhite p-6 shadow-[6px_6px_0_#000]">
             {isVirtual ? (
               <div className="grid gap-4">
-                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
-                    <div className="h-6 w-3 rounded-sm border-2 border-black bg-offwhite -rotate-90" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide">
-                      Hold Phone Up (In Person)
-                    </p>
-                    <p className="text-sm text-black/80">
-                      Active player holds the phone above their head.
-                    </p>
-                  </div>
+                <div
+                  className="overflow-hidden rounded-2xl border-2 border-black shadow-[4px_4px_0_#000]"
+                  style={{ backgroundColor: "#FED32F" }}
+                >
+                  <img
+                    src="/mode-virtual.png"
+                    alt="Virtual gameplay instructions"
+                    className="h-52 w-full object-contain"
+                  />
                 </div>
 
                 <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
@@ -2760,25 +2731,18 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                       Give Hints
                     </p>
                     <p className="text-sm text-black/80">
-                      Teammates give clues without saying the title.
+                      Players give clues without saying the title.
                     </p>
                   </div>
                 </div>
 
-                <div className="flex items-start gap-3 rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-black bg-primary shadow-[2px_2px_0_#000]">
-                    <span className="text-[11px] font-extrabold uppercase tracking-wide text-black">
-                      Next
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide">
-                      Next Card
-                    </p>
-                    <p className="text-sm text-black/80">
-                      Tap Next to advance to the next player and card.
-                    </p>
-                  </div>
+                <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 shadow-[3px_3px_0_#000]">
+                  <p className="text-xs font-semibold uppercase tracking-wide">
+                    Virtual (Video) Mode
+                  </p>
+                  <p className="text-sm text-black/80">
+                    Play it like a video call while everyone gives live hints.
+                  </p>
                 </div>
               </div>
             ) : (

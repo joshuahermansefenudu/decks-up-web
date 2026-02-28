@@ -72,6 +72,8 @@ export type RelayGameSummary = {
   gameDurationMinutes: number
   playerDurationMinutes: number
   relayMinutesUsed: number
+  relayMinutesSharedByYou: number
+  relaySharedPlayersCount: number
   relayHoursUsedPersonally: number
   relayHoursSharedByPlayers: number
   relayHoursSharedByYou: number
@@ -1257,6 +1259,8 @@ export async function getRelayGameSummaryForUser(input: {
   }
 
   let relayHoursSharedByYou = 0
+  let relayMinutesSharedByYou = 0
+  const relaySharedPlayers = new Set<string>()
   for (const session of hostSessions) {
     if (!session.startedAt) {
       continue
@@ -1278,6 +1282,8 @@ export async function getRelayGameSummaryForUser(input: {
       )
     )
     const effectiveMinutes = Math.min(rawMinutes, maxMinutes)
+    relayMinutesSharedByYou += effectiveMinutes
+    relaySharedPlayers.add(session.requesterPlayerId)
     const participants = Math.max(
       1,
       Math.min(session.activeVideoParticipants || 1, RELAY_MAX_PARTICIPANTS)
@@ -1297,6 +1303,8 @@ export async function getRelayGameSummaryForUser(input: {
     gameDurationMinutes,
     playerDurationMinutes,
     relayMinutesUsed: Number(relayMinutesUsed.toFixed(1)),
+    relayMinutesSharedByYou: Number(relayMinutesSharedByYou.toFixed(1)),
+    relaySharedPlayersCount: relaySharedPlayers.size,
     relayHoursUsedPersonally: roundHours(relayHoursUsedPersonally),
     relayHoursSharedByPlayers: roundHours(relayHoursSharedByPlayers),
     relayHoursSharedByYou: roundHours(relayHoursSharedByYou),
