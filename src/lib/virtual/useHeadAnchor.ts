@@ -179,10 +179,17 @@ export function useHeadAnchor(
         }
         const avgX = sumX / landmarks.length
         const anchorX = avgX * width
-        const anchorY = minY * height - height * 0.1
+        const anchorY = minY * height - height * 0.02
 
-        const nextX = Math.min(width, Math.max(0, anchorX))
-        const nextY = Math.min(height, Math.max(0, anchorY))
+        // Keep overlay fully visible on mobile/desktop by padding away from edges.
+        const horizontalPadding = Math.max(42, width * 0.16)
+        const verticalPadding = Math.max(34, height * 0.11)
+
+        const nextX = Math.min(
+          width - horizontalPadding,
+          Math.max(horizontalPadding, anchorX)
+        )
+        const nextY = Math.min(height, Math.max(verticalPadding, anchorY))
 
         const smoothX =
           anchorRef.current.x === 0

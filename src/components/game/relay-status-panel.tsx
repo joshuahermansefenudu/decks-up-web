@@ -55,6 +55,7 @@ type RelayViewerState = {
     planType: PlanType
     hasOwnRelayHours: boolean
     alreadySharedByViewer: boolean
+    alreadySharedByAnother?: boolean
   }>
   incomingRelayRequests?: Array<{
     requestId: string

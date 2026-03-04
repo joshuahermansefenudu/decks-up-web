@@ -2,20 +2,26 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
+import {
+  LogOut,
+  Mic,
+  MicOff,
+  Users,
+  Video,
+  VideoOff,
+} from "lucide-react"
 
 import { PrimaryButton } from "@/components/ui/primary-button"
 import { SecondaryButton } from "@/components/ui/secondary-button"
-import { PlanBadge } from "@/components/ui/plan-badge"
 import AdSlot from "@/components/ads/AdSlot"
 import { supabaseBrowser } from "@/lib/supabase-browser"
 import { useKeepScreenAwake } from "@/lib/useKeepScreenAwake"
 import { useTurnTimer } from "@/hooks/useTurnTimer"
 import { useHeadAnchor } from "@/lib/virtual/useHeadAnchor"
 import { TurnOverlayCard } from "@/components/virtual/TurnOverlayCard"
-import {
-  RelayStatusPanel,
-  type RelayRoomState,
-  type RelayViewerState,
+import type {
+  RelayRoomState,
+  RelayViewerState,
 } from "@/components/game/relay-status-panel"
 import { RelayRequestModal } from "@/components/game/relay-request-modal"
 import { RelayShareModal } from "@/components/game/relay-share-modal"
@@ -96,7 +102,7 @@ const VIDEO_PROFILE: Record<
 > = {
   // P2P first keeps quality higher while avoiding relay costs.
   p2p: { width: 640, height: 480, maxFramerate: 24, maxBitrate: 600_000 },
-  // TURN is manual and lower bitrate to reduce relay bandwidth costs.
+  // Relay fallback uses lower bitrate to reduce TURN bandwidth costs.
   relay: { width: 640, height: 360, maxFramerate: 15, maxBitrate: 300_000 },
 }
 
@@ -107,7 +113,7 @@ type VideoTileProps = {
   isSelf: boolean
   showPlaceholder: boolean
   card: Card | null
-  planType: Player["planType"]
+  connectionMode: "P2P" | "RELAY"
 }
 
 function normalizeIceServers(input: unknown): RTCIceServer[] {
@@ -169,7 +175,7 @@ function VideoTile({
   isSelf,
   showPlaceholder,
   card,
-  planType,
+  connectionMode,
 }: VideoTileProps) {
   const videoRef = React.useRef<HTMLVideoElement | null>(null)
   const [needsManualPlay, setNeedsManualPlay] = React.useState(false)
@@ -265,8 +271,12 @@ function VideoTile({
         {name}
         {isSelf ? " (You)" : ""}
       </div>
-      <div className="absolute bottom-2 right-2">
-        <PlanBadge planType={planType} className="px-2 py-0 text-[9px]" />
+      <div
+        className={`absolute bottom-2 right-2 rounded-full border-2 border-black px-2 py-0 text-[9px] font-bold uppercase tracking-wide shadow-[2px_2px_0_#000] ${
+          connectionMode === "RELAY" ? "bg-primary text-black" : "bg-offwhite text-black"
+        }`}
+      >
+        {connectionMode}
       </div>
 
       {isActive ? (
@@ -420,7 +430,11 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const shareCandidates = relayViewer?.shareCandidates ?? []
   const uncoveredShareCandidates = React.useMemo(
     () =>
-      shareCandidates.filter((candidate) => !candidate.alreadySharedByViewer),
+      shareCandidates.filter(
+        (candidate) =>
+          !candidate.alreadySharedByViewer &&
+          !candidate.alreadySharedByAnother
+      ),
     [shareCandidates]
   )
   const incomingRelayRequests = relayViewer?.incomingRelayRequests ?? []
@@ -430,18 +444,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     relayViewer?.canRequestRelay && requestableSharers.length > 0
   )
   const canShareRelayHours = Boolean(relayViewer?.canShareRelay)
-  const relayActionsAvailable =
-    preferredTransport === "relay" ||
-    canSelfEnableRelay ||
-    canRequestRelayFromOthers ||
-    canShareRelayHours
-  const isTurnSwitchDisabled =
-    requestedTransport === "relay"
-      ? false
-      : isSfuMode
-        ? !turnToggleUnlocked || !canSelfEnableRelay
-        : (requestedTransport === "p2p" && !turnToggleUnlocked) ||
-          !relayActionsAvailable
   const isActive = state.lobby.activePlayerId === playerId
   const showNetworkDebug =
     process.env.NODE_ENV === "development" ||
@@ -956,7 +958,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       requestedTransport !== "relay"
     ) {
       setTurnToggleUnlocked(true)
-      setWebrtcStatus("Relay approved. Turn on relay if direct mode still fails.")
+      setWebrtcStatus("Relay approved. Trying automatic relay fallback...")
       relayRequestSentRef.current = false
       return
     }
@@ -1183,70 +1185,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     }
   }, [])
 
-  const enableTurnMode = React.useCallback(() => {
-    if (!turnConfigLoaded) {
-      setWebrtcFailure("TURN setup is still loading.", "VFD_TURN_SETUP_LOADING")
-      return
-    }
-    if (!hasTurnServer) {
-      setWebrtcFailure(
-        "TURN is unavailable. Check /api/webrtc/ice.",
-        "VFD_TURN_UNAVAILABLE",
-        undefined,
-        turnConfigError || "no_ice_servers"
-      )
-      return
-    }
-    setRequestedTransport("relay")
-  }, [hasTurnServer, setWebrtcFailure, turnConfigError, turnConfigLoaded])
-
-  const handleTransportToggle = React.useCallback(() => {
-    if (isSfuMode) {
-      if (!playerId || !turnToggleUnlocked || relayRequestSentRef.current) {
-        return
-      }
-
-      if (requestedTransport === "relay") {
-        setRequestedTransport("p2p")
-        setWebrtcStatus("Relay turned off.")
-        return
-      }
-
-      if (canSelfEnableRelay) {
-        setRequestedTransport("relay")
-        setWebrtcStatus("Enabling relay...")
-        return
-      }
-
-      if (canRequestRelayFromOthers) {
-        relayRequestSentRef.current = true
-        void requestRelayAccess(selectedSharerPlayerId || undefined)
-      } else {
-        setWebrtcStatus(
-          "Relay unavailable: subscribe, buy hours, or request sharing."
-        )
-      }
-      return
-    }
-
-    if (requestedTransport === "p2p") {
-      enableTurnMode()
-      return
-    }
-
-    setRequestedTransport("p2p")
-  }, [
-    canRequestRelayFromOthers,
-    canSelfEnableRelay,
-    enableTurnMode,
-    isSfuMode,
-    playerId,
-    requestRelayAccess,
-    requestedTransport,
-    selectedSharerPlayerId,
-    turnToggleUnlocked,
-  ])
-
   React.useEffect(() => {
     if (!isVirtual || isSfuMode) {
       setTurnServers([])
@@ -1429,7 +1367,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           !relayAttemptedRef.current.get(peerId)
         ) {
           setWebrtcFailure(
-            "Direct connection failed. Enable relay mode?",
+            "Direct connection failed. Attempting relay fallback...",
             "VFD_P2P_TIMEOUT_UNLOCKED",
             peerId
           )
@@ -1674,7 +1612,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         const currentMode = peerModeRef.current.get(peerId) ?? mode
         if (currentMode === "p2p" && hasTurnServer) {
           setWebrtcFailure(
-            "Direct connection failed. Enable relay mode?",
+            "Direct connection failed. Attempting relay fallback...",
             "VFD_P2P_FAILED_UNLOCKED",
             peerId
           )
@@ -1719,7 +1657,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         if (connection.iceConnectionState === "failed" && mode === "p2p") {
           setWebrtcFailure(
-            "Direct connection failed. Enable relay mode?",
+            "Direct connection failed. Attempting relay fallback...",
             "VFD_P2P_ICE_FAILED_UNLOCKED",
             peerId
           )
@@ -2647,7 +2585,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     const isInPerson = state.lobby.mode === "IN_PERSON"
     const summary = state.summary
     const gameDurationLabel = formatMinutesLabel(summary?.gameDurationMinutes ?? 0)
-    const playersCount = state.players.length
     const relayUsedLabel = formatMinutesLabel(summary?.relayMinutesUsed ?? 0)
     const relaySharedLabel = formatMinutesLabel(summary?.relayMinutesSharedByYou ?? 0)
     const relaySharedPlayersCount = Math.max(
@@ -2668,10 +2605,13 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           <p className="mt-2 text-sm font-semibold text-black">
             Total game time: {gameDurationLabel}
           </p>
-          <p className="mt-1 text-sm text-black/80">Number of players: {playersCount}</p>
-          {isInPerson ? null : (
+          {isInPerson ? (
+            <p className="mt-1 text-sm text-black/80">
+              Number of players: {state.players.length}
+            </p>
+          ) : (
             <>
-              <p className="mt-1 text-sm text-black/80">Your relay time: {relayUsedLabel}</p>
+              <p className="mt-4 text-sm text-black/80">Your relay time: {relayUsedLabel}</p>
               <p className="mt-1 text-sm text-black/80">
                 Relay time shared({relaySharedPlayersCount}): {relaySharedLabel}
               </p>
@@ -2843,12 +2783,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
       canShareRelayHours &&
       hasShareCandidates &&
       requestedTransport === "p2p"
-    const relayButtonLabel =
-      canSelfEnableRelay || requestedTransport === "relay"
-        ? isSfuMode
-          ? "Enable TURN fallback"
-          : "Enable TURN fallback"
-        : "Relay locked"
 
     return (
       <div className="mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-4 pb-10 pt-8">
@@ -2994,194 +2928,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               Virtual (Video) - Code: {state.lobby.code}
             </p>
           </div>
-          <SecondaryButton type="button" onClick={handleLeave}>
-            Leave Game
-          </SecondaryButton>
         </header>
-
-        <div className="flex flex-wrap gap-3">
-          <button
-            type="button"
-            disabled={controlsDisabled}
-            onClick={() => setIsMicMuted((prev) => !prev)}
-            className={`rounded-full border-2 border-black px-4 py-2 text-xs font-semibold uppercase tracking-wide shadow-[2px_2px_0_#000] ${
-              isMicMuted ? "bg-primary text-black" : "bg-offwhite text-black"
-            } disabled:cursor-not-allowed disabled:opacity-60`}
-          >
-            {isMicMuted ? "Unmute Mic" : "Mute Mic"}
-          </button>
-          <button
-            type="button"
-            disabled={controlsDisabled}
-            onClick={() => setIsVideoMuted((prev) => !prev)}
-            className={`rounded-full border-2 border-black px-4 py-2 text-xs font-semibold uppercase tracking-wide shadow-[2px_2px_0_#000] ${
-              isVideoMuted ? "bg-primary text-black" : "bg-offwhite text-black"
-            } disabled:cursor-not-allowed disabled:opacity-60`}
-          >
-            {isVideoMuted ? "Turn Camera On" : "Turn Camera Off"}
-          </button>
-          <div
-            className={`flex items-center gap-2 rounded-full border-2 border-black px-3 py-1 shadow-[2px_2px_0_#000] ${
-              isTurnSwitchDisabled ? "bg-lightgray" : "bg-offwhite"
-            }`}
-          >
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-black">
-              {relayButtonLabel}
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={preferredTransport === "relay"}
-              aria-label={isSfuMode ? "Request TURN relay" : "Toggle TURN relay"}
-              disabled={isTurnSwitchDisabled}
-              onClick={handleTransportToggle}
-              className={`relative h-7 w-14 rounded-full border-2 border-black transition-colors ${
-                preferredTransport === "relay" ? "bg-primary" : "bg-lightgray"
-              } disabled:cursor-not-allowed disabled:opacity-60`}
-              title={
-                isTurnSwitchDisabled
-                  ? !turnToggleUnlocked
-                    ? isSfuMode
-                      ? "Relay controls unlock after direct mode fails."
-                      : "TURN unlocks after a P2P failure."
-                    : "Only players with relay hours can toggle relay directly."
-                  : undefined
-              }
-            >
-              <span
-                className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full border-2 border-black transition-transform ${
-                  preferredTransport === "relay"
-                    ? "translate-x-7 bg-offwhite"
-                    : "translate-x-0.5 bg-offwhite"
-                }`}
-              />
-            </button>
-            <span className="min-w-8 text-[10px] font-bold uppercase tracking-wide text-black">
-              {preferredTransport === "relay" ? "On" : "Off"}
-            </span>
-          </div>
-          {showRelaySharePrompt ? (
-            <PrimaryButton
-              type="button"
-              className="px-4 py-2 text-xs"
-              onClick={() => {
-                setSelectedRelayShareIds(
-                  uncoveredShareCandidates.map((candidate) => candidate.playerId)
-                )
-                setIsRelayShareModalOpen(true)
-              }}
-            >
-              Share Relay Hours
-            </PrimaryButton>
-          ) : null}
-        </div>
-        <RelayStatusPanel
-          room={relayRoom}
-          viewer={relayViewer}
-          relayActive={isRelayUsageActive}
-          isTurnUnlocked={turnToggleUnlocked}
-        />
-        {showRelaySharePrompt ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-3 text-xs font-semibold uppercase tracking-wide text-black shadow-[3px_3px_0_#000]">
-            Some players do not have relay hours. Share your hours so they can
-            continue video if P2P fails.
-          </div>
-        ) : null}
-        {relayViewer?.lowCreditWarning ? (
-          <div className="rounded-2xl border-2 border-black bg-primary px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black shadow-[3px_3px_0_#000]">
-            Low Relay Hours - Upgrade or Buy Credits
-          </div>
-        ) : null}
-        {relayViewer?.expiringSoonWarning ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/80 shadow-[3px_3px_0_#000]">
-            Banked relay hours expire in less than 7 days.
-          </div>
-        ) : null}
-        {relayStateError ? (
-          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-2 text-xs font-semibold text-black shadow-[3px_3px_0_#000]">
-            {relayStateError}
-          </div>
-        ) : null}
-        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-          Connection mode:{" "}
-          {isSfuMode
-            ? preferredTransport === "relay"
-              ? "SFU relay"
-              : "SFU direct"
-            : preferredTransport === "relay"
-              ? "TURN relay"
-              : "P2P"}
-          {isSfuMode
-            ? ""
-            : !turnConfigLoaded
-              ? " (loading TURN setup...)"
-              : requestedTransport === "relay" && !hasTurnServer
-                ? " (TURN unavailable)"
-                : ""}
-        </div>
-        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-          Relay usage: {isRelayUsageActive ? "active" : "inactive"}
-        </div>
-        {isTurnSwitchDisabled ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            {!turnToggleUnlocked
-              ? isSfuMode
-                ? "Relay controls unlock after direct mode fails."
-                : "TURN switch unlocks after P2P fails."
-              : "Direct relay toggle requires your own relay hours."}
-          </div>
-        ) : null}
-
-        {mediaError ? (
-          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-sm font-semibold text-black shadow-[3px_3px_0_#000]">
-            {mediaError}
-          </div>
-        ) : null}
-        {showNetworkDebug ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            Signal: {signalStatus}
-          </div>
-        ) : null}
-        {webrtcStatus ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-xs font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            {webrtcStatus}
-          </div>
-        ) : null}
-        {showNetworkDebug && signalDebug ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            {signalDebug}
-          </div>
-        ) : null}
-        {showNetworkDebug ? (
-          <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-            Remote tracks: {remoteTrackDebug}
-          </div>
-        ) : null}
-        <div className="rounded-2xl border-2 border-black bg-lightgray px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-black/70 shadow-[3px_3px_0_#000]">
-          {iceStatus || "ICE candidates: checking..."}
-        </div>
-        {videoErrorCode ? (
-          <div className="rounded-2xl border-2 border-black bg-offwhite px-4 py-3 text-[11px] text-black shadow-[3px_3px_0_#000]">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-black/70">
-              Copy and send this code
-            </p>
-            <p className="mt-1 break-all font-mono text-[10px]">
-              {videoErrorCode}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof navigator === "undefined" || !navigator.clipboard) {
-                  return
-                }
-                void navigator.clipboard.writeText(videoErrorCode)
-              }}
-              className="mt-2 rounded-full border-2 border-black bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-wide text-black shadow-[2px_2px_0_#000]"
-            >
-              Copy Error Code
-            </button>
-          </div>
-        ) : null}
 
         <div className="relative rounded-3xl border-2 border-black bg-offwhite p-4 shadow-[6px_6px_0_#000]">
           <div className="flex items-center justify-between gap-3">
@@ -3198,9 +2945,25 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
             const otherPlayers = state.players.filter(
               (player) => player.id !== activeId
             )
+            const orderedPlayers = activePlayer
+              ? [activePlayer, ...otherPlayers]
+              : state.players
+            const connectionMode: "P2P" | "RELAY" =
+              isRelayUsageActive || preferredTransport === "relay"
+                ? "RELAY"
+                : "P2P"
             const renderTile = (
               player: Player,
-              size: "main" | "thumb" | "panel"
+              size:
+                | "main"
+                | "thumb"
+                | "panel"
+                | "duo"
+                | "duo-mobile"
+                | "six-mobile"
+                | "five-main-mobile"
+                | "five-secondary-mobile"
+                | "trio-main"
             ) => {
               const isSelf = player.id === playerId
               const isGuesser = player.id === state.lobby.activePlayerId
@@ -3216,6 +2979,18 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                   className={
                     size === "panel"
                       ? "h-full w-full"
+                      : size === "duo"
+                        ? "aspect-[3/4] w-full md:h-full md:aspect-auto"
+                      : size === "duo-mobile"
+                        ? "aspect-[4/3] w-full"
+                      : size === "six-mobile"
+                        ? "aspect-[3/4] w-full"
+                      : size === "five-main-mobile"
+                        ? "aspect-[16/9] w-full"
+                      : size === "five-secondary-mobile"
+                        ? "aspect-square w-full"
+                      : size === "trio-main"
+                        ? "aspect-[4/3] w-full md:aspect-auto"
                       : size === "main"
                         ? "aspect-[3/4] w-full"
                         : "aspect-[3/4] w-24 flex-shrink-0"
@@ -3228,7 +3003,7 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
                     isSelf={isSelf}
                     showPlaceholder={showPlaceholder}
                     card={card}
-                    planType={player.planType}
+                    connectionMode={connectionMode}
                   />
                 </div>
               )
@@ -3236,37 +3011,195 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
             return (
               <div className="mt-4">
-                <div className="flex flex-col gap-3 md:hidden">
-                  {activePlayer ? (
-                    <div className="w-full">
-                      {renderTile(activePlayer, "main")}
+                {state.players.length === 8 ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 md:hidden">
+                      {orderedPlayers.slice(0, 8).map((player) =>
+                        renderTile(player, "five-secondary-mobile")
+                      )}
                     </div>
-                  ) : null}
-                  {otherPlayers.length > 0 ? (
-                    <div className="flex gap-3 overflow-x-auto pb-1">
-                      {otherPlayers.map((player) => renderTile(player, "thumb"))}
+                    <div className="hidden md:grid md:h-[min(72vh,760px)] md:min-h-[520px] md:grid-cols-4 md:grid-rows-2 md:gap-3">
+                      {orderedPlayers.slice(0, 8).map((player) =>
+                        renderTile(player, "panel")
+                      )}
                     </div>
-                  ) : null}
-                </div>
-                <div className="hidden md:flex h-[min(72vh,760px)] min-h-[520px] items-stretch gap-4">
-                  <div className="h-full w-1/2">
-                    {activePlayer ? renderTile(activePlayer, "panel") : null}
-                  </div>
-                  <div className="h-full w-1/2">
-                    {otherPlayers.length > 0 ? (
-                      <div className="grid h-full min-h-0 grid-cols-2 auto-rows-fr gap-3">
-                        {otherPlayers.map((player) =>
+                  </>
+                ) : null}
+                {state.players.length === 7 ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 md:hidden">
+                      {orderedPlayers[0]
+                        ? renderTile(orderedPlayers[0], "five-main-mobile")
+                        : null}
+                      <div className="grid grid-cols-2 gap-3">
+                        {orderedPlayers.slice(1, 7).map((player) =>
+                          renderTile(player, "five-secondary-mobile")
+                        )}
+                      </div>
+                    </div>
+                    <div className="hidden md:flex md:h-[min(72vh,760px)] md:min-h-[520px] md:flex-col md:gap-3">
+                      <div className="grid h-1/2 grid-cols-4 gap-3">
+                        {orderedPlayers.slice(0, 4).map((player) =>
                           renderTile(player, "panel")
                         )}
                       </div>
-                    ) : null}
+                      <div className="flex h-1/2 justify-center">
+                        <div className="grid h-full w-3/4 grid-cols-3 gap-3">
+                          {orderedPlayers.slice(4, 7).map((player) =>
+                            renderTile(player, "panel")
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+                {state.players.length === 6 ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 md:hidden">
+                      {orderedPlayers.slice(0, 6).map((player) =>
+                        renderTile(player, "six-mobile")
+                      )}
+                    </div>
+                    <div className="hidden md:grid md:h-[min(72vh,760px)] md:min-h-[520px] md:grid-cols-3 md:grid-rows-2 md:gap-3">
+                      {orderedPlayers.slice(0, 6).map((player) =>
+                        renderTile(player, "panel")
+                      )}
+                    </div>
+                  </>
+                ) : null}
+                {state.players.length === 5 ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 md:hidden">
+                      {orderedPlayers[0]
+                        ? renderTile(orderedPlayers[0], "five-main-mobile")
+                        : null}
+                      <div className="grid grid-cols-2 gap-3">
+                        {orderedPlayers[1]
+                          ? renderTile(orderedPlayers[1], "five-secondary-mobile")
+                          : null}
+                        {orderedPlayers[2]
+                          ? renderTile(orderedPlayers[2], "five-secondary-mobile")
+                          : null}
+                        {orderedPlayers[3]
+                          ? renderTile(orderedPlayers[3], "five-secondary-mobile")
+                          : null}
+                        {orderedPlayers[4]
+                          ? renderTile(orderedPlayers[4], "five-secondary-mobile")
+                          : null}
+                      </div>
+                    </div>
+                    <div className="hidden md:flex md:h-[min(72vh,760px)] md:min-h-[520px] md:flex-col md:gap-3">
+                      <div className="grid h-1/2 grid-cols-3 gap-3">
+                        {orderedPlayers[0]
+                          ? renderTile(orderedPlayers[0], "panel")
+                          : null}
+                        {orderedPlayers[1]
+                          ? renderTile(orderedPlayers[1], "panel")
+                          : null}
+                        {orderedPlayers[2]
+                          ? renderTile(orderedPlayers[2], "panel")
+                          : null}
+                      </div>
+                      <div className="flex h-1/2 justify-center">
+                        <div className="grid h-full w-2/3 grid-cols-2 gap-3">
+                          {orderedPlayers[3]
+                            ? renderTile(orderedPlayers[3], "panel")
+                            : null}
+                          {orderedPlayers[4]
+                            ? renderTile(orderedPlayers[4], "panel")
+                            : null}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+                {state.players.length === 4 ? (
+                  <div className="grid grid-cols-2 gap-3 md:h-[min(72vh,760px)] md:min-h-[520px] md:grid-rows-2 md:auto-rows-fr">
+                    {orderedPlayers.map((player) => renderTile(player, "duo"))}
                   </div>
-                </div>
+                ) : null}
+                {state.players.length === 3 ? (
+                  <div className="grid grid-cols-1 gap-3">
+                    {(() => {
+                      const first = orderedPlayers[0]
+                      const second = orderedPlayers[1]
+                      const third = orderedPlayers[2]
+
+                      return (
+                        <>
+                          <div className="w-full md:hidden">
+                            {first ? renderTile(first, "trio-main") : null}
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 md:hidden">
+                            {second ? renderTile(second, "duo") : null}
+                            {third ? renderTile(third, "duo") : null}
+                          </div>
+
+                          <div className="hidden md:grid md:grid-cols-2 md:gap-3">
+                            {first ? renderTile(first, "panel") : null}
+                            {second ? renderTile(second, "panel") : null}
+                          </div>
+                          <div className="hidden md:flex md:justify-center">
+                            <div className="w-[48%]">
+                              {third ? renderTile(third, "panel") : null}
+                            </div>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </div>
+                ) : null}
+                {state.players.length === 2 ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 md:hidden">
+                      {orderedPlayers.map((player) => renderTile(player, "duo-mobile"))}
+                    </div>
+                    <div className="hidden md:grid md:h-[min(72vh,760px)] md:min-h-[520px] md:grid-cols-2 md:gap-3">
+                      {orderedPlayers.map((player) => renderTile(player, "duo"))}
+                    </div>
+                  </>
+                ) : null}
+                {state.players.length === 2 ||
+                state.players.length === 3 ||
+                state.players.length === 4 ||
+                state.players.length === 5 ||
+                state.players.length === 6 ||
+                state.players.length === 7 ||
+                state.players.length === 8 ? null : (
+                  <>
+                    <div className="flex flex-col gap-3 md:hidden">
+                      {activePlayer ? (
+                        <div className="w-full">
+                          {renderTile(activePlayer, "main")}
+                        </div>
+                      ) : null}
+                      {otherPlayers.length > 0 ? (
+                        <div className="flex gap-3 overflow-x-auto pb-1">
+                          {otherPlayers.map((player) => renderTile(player, "thumb"))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="hidden md:flex h-[min(72vh,760px)] min-h-[520px] items-stretch gap-4">
+                      <div className="h-full w-1/2">
+                        {activePlayer ? renderTile(activePlayer, "panel") : null}
+                      </div>
+                      <div className="h-full w-1/2">
+                        {otherPlayers.length > 0 ? (
+                          <div className="grid h-full min-h-0 grid-cols-2 auto-rows-fr gap-3">
+                            {otherPlayers.map((player) =>
+                              renderTile(player, "panel")
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             )
           })()}
           {isActive ? (
-            <div className="absolute bottom-4 right-4 z-10">
+            <div className="mt-4 flex justify-end">
               <PrimaryButton
                 type="button"
                 onClick={handleNext}
@@ -3277,6 +3210,72 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
               </PrimaryButton>
             </div>
           ) : null}
+
+        </div>
+
+        <div className="flex justify-center">
+          <div className="flex items-center gap-2 rounded-full border-2 border-black bg-offwhite px-2 py-1 shadow-[3px_3px_0_#000]">
+            <button
+              type="button"
+              disabled={controlsDisabled}
+              onClick={() => setIsMicMuted((prev) => !prev)}
+              aria-label={isMicMuted ? "Unmute mic" : "Mute mic"}
+              title={isMicMuted ? "Unmute mic" : "Mute mic"}
+              className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-black shadow-[2px_2px_0_#000] ${
+                isMicMuted ? "bg-primary text-black" : "bg-offwhite text-black"
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {isMicMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            </button>
+
+            <button
+              type="button"
+              disabled={controlsDisabled}
+              onClick={() => setIsVideoMuted((prev) => !prev)}
+              aria-label={isVideoMuted ? "Turn camera on" : "Turn camera off"}
+              title={isVideoMuted ? "Turn camera on" : "Turn camera off"}
+              className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-black shadow-[2px_2px_0_#000] ${
+                isVideoMuted ? "bg-primary text-black" : "bg-offwhite text-black"
+              } disabled:cursor-not-allowed disabled:opacity-60`}
+            >
+              {isVideoMuted ? <VideoOff className="h-4 w-4" /> : <Video className="h-4 w-4" />}
+            </button>
+
+            {canShareRelayHours ? (
+              <button
+                type="button"
+                disabled={!showRelaySharePrompt || isRelayShareSubmitting}
+                onClick={() => {
+                  setSelectedRelayShareIds(
+                    uncoveredShareCandidates.map((candidate) => candidate.playerId)
+                  )
+                  setIsRelayShareModalOpen(true)
+                }}
+                aria-label="Share relay hours with players"
+                title={
+                  showRelaySharePrompt
+                    ? "Share relay hours with players"
+                    : "No players need relay sharing right now"
+                }
+                className={`flex h-10 w-10 items-center justify-center rounded-full border-2 border-black shadow-[2px_2px_0_#000] ${
+                  showRelaySharePrompt ? "bg-primary text-black" : "bg-lightgray text-black/70"
+                } disabled:cursor-not-allowed disabled:opacity-60`}
+              >
+                <Users className="h-4 w-4" />
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={handleLeave}
+              aria-label="Leave game"
+              title="Leave game"
+              className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-black bg-black text-offwhite shadow-[2px_2px_0_#000] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {!isActive ? (

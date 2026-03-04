@@ -9,6 +9,7 @@ type RelayShareCandidate = {
   name: string
   planType: PlanType
   alreadySharedByViewer: boolean
+  alreadySharedByAnother?: boolean
 }
 
 type RelayShareModalProps = {
@@ -61,20 +62,31 @@ function RelayShareModal({
           ) : (
             candidates.map((candidate) => {
               const checked = selectedPlayerIds.includes(candidate.playerId)
+              const disabled = Boolean(candidate.alreadySharedByAnother)
               return (
                 <label
                   key={candidate.playerId}
-                  className="flex cursor-pointer items-center justify-between gap-3 rounded-xl border-2 border-black bg-lightgray px-3 py-2 shadow-[2px_2px_0_#000]"
+                  className={`flex items-center justify-between gap-3 rounded-xl border-2 border-black px-3 py-2 shadow-[2px_2px_0_#000] ${
+                    disabled
+                      ? "cursor-not-allowed bg-lightgray/70 opacity-60"
+                      : "cursor-pointer bg-lightgray"
+                  }`}
                 >
                   <div className="flex items-center gap-3">
                     <input
                       type="checkbox"
                       checked={checked}
+                      disabled={disabled}
                       onChange={() => onTogglePlayer(candidate.playerId)}
                       className="h-4 w-4 accent-black"
                     />
                     <div>
                       <p className="text-sm font-semibold text-black">{candidate.name}</p>
+                      {candidate.alreadySharedByAnother ? (
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-black/60">
+                          Already covered by another player
+                        </p>
+                      ) : null}
                       {candidate.alreadySharedByViewer ? (
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-black/60">
                           Already approved

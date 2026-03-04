@@ -1018,6 +1018,19 @@ export async function getRelayState(input: {
     ).map((session) => session.requesterPlayerId)
   )
 
+  const alreadySharedByAny = new Set(
+    (
+      await prisma.relaySession.findMany({
+        where: {
+          lobbyId: lobby.id,
+          status: { in: ["APPROVED", "ACTIVE"] },
+          expiresAt: { gte: now },
+        },
+        select: { requesterPlayerId: true },
+      })
+    ).map((session) => session.requesterPlayerId)
+  )
+
   const canEnableRelaySelf = Boolean(
     (selfSummary && selfSummary.totalAvailableHours > 0) || activeOrApprovedForSelf
   )
@@ -1038,6 +1051,8 @@ export async function getRelayState(input: {
       planType: player.planType,
       hasOwnRelayHours: player.totalAvailableHours > 0,
       alreadySharedByViewer: alreadySharedByViewer.has(player.id),
+      alreadySharedByAnother:
+        alreadySharedByAny.has(player.id) && !alreadySharedByViewer.has(player.id),
     }))
 
   const relayHasAnyCredits = contexts.some(
@@ -1184,12 +1199,14 @@ export async function getRelayGameSummaryForUser(input: {
           where: {
             lobbyId: input.lobbyId,
             requesterPlayerId: input.playerId,
-            startedAt: { not: null },
+            OR: [{ startedAt: { not: null } }, { lastDeductedAt: { not: null } }],
           },
           select: {
             requesterPlayerId: true,
             hostPlayerId: true,
             startedAt: true,
+            lastDeductedAt: true,
+            createdAt: true,
             endedAt: true,
             maxMinutesGranted: true,
             activeVideoParticipants: true,
@@ -1202,12 +1219,14 @@ export async function getRelayGameSummaryForUser(input: {
           where: {
             lobbyId: input.lobbyId,
             hostPlayerId: input.playerId,
-            startedAt: { not: null },
+            OR: [{ startedAt: { not: null } }, { lastDeductedAt: { not: null } }],
           },
           select: {
             requesterPlayerId: true,
             hostPlayerId: true,
             startedAt: true,
+            lastDeductedAt: true,
+            createdAt: true,
             endedAt: true,
             maxMinutesGranted: true,
             activeVideoParticipants: true,
@@ -1221,13 +1240,11 @@ export async function getRelayGameSummaryForUser(input: {
   let relayHoursUsedPersonally = 0
   let relayHoursSharedByPlayers = 0
   for (const session of requesterSessions) {
-    if (!session.startedAt) {
-      continue
-    }
+    const sessionStart = session.startedAt ?? session.createdAt
     const cappedEnd = session.endedAt ?? sessionEnd
     const rawMinutes = Math.max(
       0,
-      (cappedEnd.getTime() - session.startedAt.getTime()) / 60_000
+      (cappedEnd.getTime() - sessionStart.getTime()) / 60_000
     )
     const maxMinutes = Math.max(
       1,
@@ -1262,9 +1279,7 @@ export async function getRelayGameSummaryForUser(input: {
   let relayMinutesSharedByYou = 0
   const relaySharedPlayers = new Set<string>()
   for (const session of hostSessions) {
-    if (!session.startedAt) {
-      continue
-    }
+    const sessionStart = session.startedAt ?? session.createdAt
     if (session.requesterPlayerId === input.playerId) {
       // Exclude self sessions from "shared by you".
       continue
@@ -1272,7 +1287,7 @@ export async function getRelayGameSummaryForUser(input: {
     const cappedEnd = session.endedAt ?? sessionEnd
     const rawMinutes = Math.max(
       0,
-      (cappedEnd.getTime() - session.startedAt.getTime()) / 60_000
+      (cappedEnd.getTime() - sessionStart.getTime()) / 60_000
     )
     const maxMinutes = Math.max(
       1,
@@ -1463,8 +1478,21 @@ export async function deductRelayTick(input: {
     }
 
     const now = new Date()
-    const startedAt = session.startedAt ?? session.createdAt
+    const startedAt = session.startedAt ?? now
+
+    if (!session.startedAt) {
+      await tx.relaySession.update({
+        where: { id: session.id },
+        data: {
+          startedAt,
+          status: session.status === "APPROVED" ? "ACTIVE" : session.status,
+          note: "relay_started",
+        },
+      })
+    }
+
     const elapsedMinutes = (now.getTime() - startedAt.getTime()) / 60_000
+
     const grantedMaxMinutes = Math.max(
       1,
       Math.min(session.maxMinutesGranted ?? RELAY_SESSION_MAX_MINUTES, RELAY_SESSION_MAX_MINUTES)
@@ -1542,6 +1570,7 @@ export async function deductRelayTick(input: {
       where: { id: session.id },
       data: {
         status: shouldDisable ? "ENDED" : "ACTIVE",
+        startedAt: session.startedAt ?? now,
         endedAt: shouldDisable ? now : null,
         activeVideoParticipants: participants,
         lastDeductedAt: now,

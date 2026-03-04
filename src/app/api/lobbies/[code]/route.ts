@@ -56,6 +56,16 @@ export async function GET(request: Request, { params }: RouteContext) {
 
   const url = new URL(request.url)
   const playerId = url.searchParams.get("playerId")?.trim() ?? ""
+  const currentPlayerRecord = playerId
+    ? await prisma.player.findFirst({
+        where: { id: playerId, lobbyId: lobby.id },
+        select: {
+          id: true,
+          authUserId: true,
+          createdAt: true,
+        },
+      })
+    : null
   const totalPhotos = await prisma.photo.count({
     where: { lobbyId: lobby.id },
   })
@@ -99,9 +109,6 @@ export async function GET(request: Request, { params }: RouteContext) {
     planMap = {}
   }
 
-  const currentPlayer = playerId
-    ? lobby.players.find((player) => player.id === playerId) ?? null
-    : null
   let relayGameSummary: Awaited<ReturnType<typeof getRelayGameSummaryForUser>> = {
     gameDurationMinutes: Math.max(
       0,
@@ -113,7 +120,7 @@ export async function GET(request: Request, { params }: RouteContext) {
       0,
       Math.round(
         ((lobby.endedAt ?? new Date()).getTime() -
-          (currentPlayer?.createdAt ?? lobby.createdAt).getTime()) /
+          (currentPlayerRecord?.createdAt ?? lobby.createdAt).getTime()) /
           60_000
       )
     ),
@@ -133,9 +140,9 @@ export async function GET(request: Request, { params }: RouteContext) {
       lobbyId: lobby.id,
       gameStartedAt: lobby.createdAt,
       gameEndedAt: lobby.endedAt,
-      playerId: currentPlayer?.id ?? null,
-      playerJoinedAt: currentPlayer?.createdAt ?? null,
-      authUserId: currentPlayer?.authUserId ?? null,
+      playerId: currentPlayerRecord?.id ?? null,
+      playerJoinedAt: currentPlayerRecord?.createdAt ?? null,
+      authUserId: currentPlayerRecord?.authUserId ?? null,
     })
   } catch {
     // Failsafe for environments that have not run relay-pricing migration yet.
