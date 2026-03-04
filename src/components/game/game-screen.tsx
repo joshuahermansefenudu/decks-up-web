@@ -351,7 +351,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
     React.useState("")
   const [mediaError, setMediaError] = React.useState("")
   const [webrtcStatus, setWebrtcStatus] = React.useState("")
-  const [videoErrorCode, setVideoErrorCode] = React.useState("")
   const [signalStatus, setSignalStatus] = React.useState("idle")
   const [iceStatus, setIceStatus] = React.useState("")
   const [signalDebug, setSignalDebug] = React.useState("")
@@ -527,7 +526,9 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
   const setRelayFailure = React.useCallback(
     (message: string, code: string) => {
       setWebrtcStatus(message)
-      setVideoErrorCode(`VIDEO_FEED_ERROR_CODE=${code}`)
+      if (process.env.NODE_ENV === "development") {
+        console.log("VIDEO_RELAY_ERROR", { code, message })
+      }
     },
     []
   )
@@ -913,7 +914,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         ` | counts=ready ${c.readySent}/${c.readyReceived},offer ${c.offerSent}/${c.offerReceived},answer ${c.answerSent}/${c.answerReceived},ice ${c.iceSent}/${c.iceReceived}` +
         (detail ? ` | detail=${detail}` : "")
 
-      setVideoErrorCode(errorCode)
       updateSignalDebug(true)
       if (process.env.NODE_ENV === "development") {
         console.log(errorCode)
@@ -1593,7 +1593,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 
         if (connection.connectionState === "connected") {
           setWebrtcStatus("")
-          setVideoErrorCode("")
           if (mode === "p2p") {
             setTurnToggleUnlocked(false)
           }
@@ -2021,7 +2020,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
           setWebrtcStatus("SFU connected.")
           setTurnToggleUnlocked(false)
           setRequestedTransport("p2p")
-          setVideoErrorCode("")
         } catch (error) {
           handleFallback(
             "SFU setup failed. Falling back to direct mode.",
@@ -2205,7 +2203,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
 	      setSignalStatus((prev) => (prev === status ? prev : status))
 	      if (status === "SUBSCRIBED") {
 	        setWebrtcStatus("")
-	        setVideoErrorCode("")
           const now = Date.now()
           if (now - subscribedReadyAtRef.current >= 3000) {
             subscribedReadyAtRef.current = now
@@ -2359,7 +2356,6 @@ function GameScreen({ initialState, playerId }: GameScreenProps) {
         ? "TURN relay enabled. Reconnecting video..."
         : "P2P mode enabled. Reconnecting video..."
     )
-    setVideoErrorCode("")
     peersRef.current.forEach((_, peerId) => cleanupPeer(peerId))
   }, [cleanupPeer, isSfuMode, isVirtual, localStream, playerId, preferredTransport])
 
